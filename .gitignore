@@ -1,5 +1,6 @@
 release/
 dist/ 
+backup/
 *.obj
 *.exe
 *.pdb
