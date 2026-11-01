@@ -62,6 +62,9 @@ static void paint_main(HWND h) {
         DrawTextW(dc, L"llama.cpp", -1, &t, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
         SelectObject(dc, hFont); SetTextColor(dc, cAccent); RECT t2 = { 124, 22, rcSide.right - 10, 50 };
         DrawTextW(dc, L"  native", -1, &t2, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        SelectObject(dc, hFont); SetTextColor(dc, cDim);
+        RECT tv = { 14, 22, rcSide.right - 16, 50 };
+        DrawTextW(dc, L"v" LLAMAC_VERSION, -1, &tv, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
         rrect(dc, &rcSearch, 16, cSurf, cBorder);
         DeleteObject(lb);
     }
@@ -108,6 +111,7 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     }
     case WM_APP_INIT:
         layout();
+        tools_startup();
         set_status("Connecting...");
         if (!nconv) convs_add(conv_new());
         qsort(convs, (size_t)nconv, sizeof(Conv *), cmp_mod);
@@ -195,18 +199,43 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l) {
                 if (cur == genConv) re_add(b, strlen(b), cErr, 0, FACE);
                 set_status(g->text);
             } else if (g->kind == 4) {
+                int cont = 0;
                 if (g_timer_on) { KillTimer(h, 1); g_timer_on = 0; }
-                set_busy(0);
                 if (genConv && genNode < genConv->cnt) {
                     Node *n = &genConv->n[genNode];
-                    if (!n->content[0] && !n->reasoning[0]) {
+                    int maxr = atoi(G.toolmax); if (maxr <= 0) maxr = 10;
+                    if (n->tcalls && *n->tcalls) {
+                        if (g_stop) { free(n->tcalls); n->tcalls = NULL; }
+                        else if (g_toolround >= maxr) { free(n->tcalls); n->tcalls = NULL; set_status("Tool round limit reached (Settings > Max tool rounds)"); }
+                        else cont = 1;
+                    }
+                    if (!cont && !n->content[0] && !n->reasoning[0]) {
                         Node *pn = &genConv->n[n->parent];
                         for (int k = 0; k < pn->nk; k++) if (pn->kids[k] == genNode) { memmove(&pn->kids[k], &pn->kids[k + 1], (size_t)(pn->nk - k - 1) * sizeof(int)); pn->nk--; break; }
                         if (genConv->leaf == genNode) genConv->leaf = n->parent;
                     }
                 }
                 if (genConv) genConv->mod = now_ms();
+                if (cont) { g_toolround++; set_status("Running tools..."); tool_run_start(genConv->n[genNode].tcalls); }   /* stays busy until the tools finish */
+                else set_busy(0);
                 refresh_list(); render_all(); save_all();
+            } else if (g->kind == 5) {                 /* tool_calls of the assistant message just streamed */
+                if (genConv && genNode < genConv->cnt) setstr(&genConv->n[genNode].tcalls, g->text);
+            } else if (g->kind == 6) {                 /* tool result: "id\nname\nresult" */
+                char *id = g->text, *nm = strchr(id, '\n'), *res = NULL;
+                if (nm) { *nm++ = 0; res = strchr(nm, '\n'); }
+                if (res && genConv) {
+                    *res++ = 0;
+                    int t = node_add(genConv, genConv->leaf, ROLE_TOOL); Node *tn = &genConv->n[t];
+                    setstr(&tn->content, res); setstr(&tn->tcid, id); setstr(&tn->tname, nm);
+                    genConv->leaf = t;
+                    if (cur == genConv) render_all();
+                }
+            } else if (g->kind == 8) {                 /* all tools of this round finished */
+                if (g_stop || !genConv) { set_busy(0); refresh_list(); render_all(); save_all(); }
+                else { if (cur != genConv) select_conv(genConv); save_all(); start_gen_ex(genConv->leaf, 1); }
+            } else if (g->kind == 9) {
+                set_status(g->text);
             }
         }
         free(g->text); free(g); return 0;

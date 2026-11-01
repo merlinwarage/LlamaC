@@ -8,6 +8,8 @@ typedef struct {
     /* sampling overrides are strings: EMPTY = "not set -> use the llama-server value" */
     char temp[24], top_k[24], top_p[24], min_p[24], rep[24], pres[24], freq[24], dry[24], maxtok[24], seed[24];
     int dark, thoughts, stats, smartpaste;
+    char fsroot[512], toolmax[24];   /* file-tool root folder, max tool rounds per message */
+    int tools_on, fswrite, autoappr, mem_on; /* enable tools, allow file writes, auto-approve every call */
 } Cfg;
 /* kind: 0 text, 1 number override (empty = server default), 3 checkbox */
 typedef struct { const char *key, *label; int kind; size_t off, size; const char *rkey, *pkey; } Field;
@@ -25,6 +27,12 @@ static const Field FIELDS[] = {
     FLD("thoughts", "Show reasoning blocks", 3, thoughts, NULL, NULL),
     FLD("stats", "Show generation speed", 3, stats, NULL, NULL),
     FLD("smartpaste", "Long paste becomes attachment", 3, smartpaste, NULL, NULL),
+    FLD("tools", "Enable tools (file access + MCP)", 3, tools_on, NULL, NULL),
+    FLD("mem", "Long-term memory (saved facts)", 3, mem_on, NULL, NULL),
+    FLD("fsroot", "File tools root folder", 0, fsroot, NULL, NULL),
+    FLD("fswrite", "Allow file write / edit tools", 3, fswrite, NULL, NULL),
+    FLD("autoappr", "Auto-approve ALL tool calls (unsafe)", 3, autoappr, NULL, NULL),
+    FLD("toolmax", "Max tool rounds per message", 0, toolmax, NULL, NULL),
     FLD("temp", "Temperature", 1, temp, "temperature", "temperature"),
     FLD("top_k", "Top K", 1, top_k, "top_k", "top_k"),
     FLD("top_p", "Top P", 1, top_p, "top_p", "top_p"),
@@ -43,6 +51,8 @@ static void cfg_defaults(Cfg *g) {
     memset(g, 0, sizeof *g);
     strcpy(g->url, "http://127.0.0.1:8080");
     g->dark = 1; g->thoughts = 1; g->stats = 1; g->smartpaste = 1;
+    g->tools_on = 1; strcpy(g->toolmax, "10");
+    g->mem_on = 1;
 }
 /* default_generation_settings.params from GET /props -> out[NFIELDS] ("" = unknown) */
 static void srv_parse(J *props, char out[][32]) {

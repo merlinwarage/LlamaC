@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "example-stdio": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-everything"],
+      "env": {},
+      "autoApprove": [],
+      "disabled": true
+    },
+    "example-http": {
+      "url": "http://127.0.0.1:3000/mcp",
+      "headers": { "Authorization": "Bearer TOKEN" },
+      "disabled": true
+    }
+  }
+}

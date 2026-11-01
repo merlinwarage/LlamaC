@@ -3,7 +3,7 @@
 #define LLAMAC_REQUEST_H
 
 /* ======================= request builder ======================= */
-static const char *role_name(int r) { return r == ROLE_USER ? "user" : r == ROLE_ASSIST ? "assistant" : "system"; }
+static const char *role_name(int r) { return r == ROLE_USER ? "user" : r == ROLE_ASSIST ? "assistant" : r == ROLE_TOOL ? "tool" : "system"; }
 static void put_msg_content(SB *s, Node *m) {
     int media = 0;
     for (int i = 0; i < m->na; i++) if (m->att[i].kind != ATT_TEXT) media = 1;
@@ -23,18 +23,41 @@ static void put_msg_content(SB *s, Node *m) {
     }
     sb_putc(s, ']');
 }
+static char *tools_schema_build(void); /* defined in tools.h: JSON array for the "tools" request field, or NULL */
+static char *mem_digest(void);         /* memory.h */
 static void build_messages(SB *s, Conv *c, const Cfg *g) {
-    int first = 1; int *p; int n;
+    int first = 1; int *p; int n; int tools_left = 0;
+    char *md = mem_digest(); SB sy = {0};
     sb_puts(s, "\"messages\":[");
-    if (g->sys[0]) { sb_puts(s, "{\"role\":\"system\",\"content\":"); sb_json(s, g->sys); sb_putc(s, '}'); first = 0; }
+    sb_puts(&sy, g->sys);
+    if (md) { if (sy.n) sb_puts(&sy, "\n\n"); sb_puts(&sy, md); free(md); }
+    if (sy.n) { sb_puts(s, "{\"role\":\"system\",\"content\":"); sb_json(s, sbs(&sy)); sb_putc(s, '}'); first = 0; }
+    free(sy.p);
     n = conv_path(c, &p);
     for (int i = 0; i < n; i++) {
-        Node *m = &c->n[p[i]];
-        if (m->role == ROLE_ASSIST && !m->content[0]) continue;
+        Node *m = &c->n[p[i]]; int tc = 0;
+        if (m->role == ROLE_TOOL) {                      /* only valid directly after an assistant tool_calls message */
+            if (tools_left <= 0) continue;
+            tools_left--;
+            if (!first) sb_putc(s, ',');
+            first = 0;
+            sb_puts(s, "{\"role\":\"tool\",\"tool_call_id\":"); sb_json(s, m->tcid ? m->tcid : "");
+            sb_puts(s, ",\"content\":"); sb_json(s, m->content); sb_putc(s, '}');
+            continue;
+        }
+        tools_left = 0;
+        if (m->role == ROLE_ASSIST && m->tcalls && *m->tcalls) {   /* send tool_calls only when every call has a result */
+            int need = tc_count(m->tcalls), have = 0;
+            while (i + 1 + have < n && c->n[p[i + 1 + have]].role == ROLE_TOOL) have++;
+            if (need > 0 && have >= need) { tc = 1; tools_left = need; }
+        }
+        if (m->role == ROLE_ASSIST && !m->content[0] && !tc) continue;
         if (!first) sb_putc(s, ',');
         first = 0;
         sb_printf(s, "{\"role\":\"%s\",\"content\":", role_name(m->role));
-        put_msg_content(s, m); sb_putc(s, '}');
+        if (tc && !m->content[0]) sb_puts(s, "null"); else put_msg_content(s, m);
+        if (tc) { sb_puts(s, ",\"tool_calls\":"); sb_puts(s, m->tcalls); }
+        sb_putc(s, '}');
     }
     free(p);
     sb_putc(s, ']');
@@ -48,6 +71,7 @@ static char *build_request(Conv *c, const Cfg *g) {
     SB s = {0};
     sb_putc(&s, '{'); build_messages(&s, c, g);
     sb_puts(&s, ",\"stream\":true,\"timings_per_token\":true");
+    { char *tl = tools_schema_build(); if (tl) { sb_puts(&s, ",\"tools\":"); sb_puts(&s, tl); free(tl); } }
     if (g->model[0]) { sb_puts(&s, ",\"model\":"); sb_json(&s, g->model); }
     for (int i = 0; i < NFIELDS; i++) {
         const Field *f = &FIELDS[i]; const char *v = (const char *)g + f->off; char *e, nb[40];

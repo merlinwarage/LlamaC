@@ -20,6 +20,7 @@ static void handle_line(char *ln) {
     const char *c = j_str(j_get(d, "content")), *rc = j_str(j_get(d, "reasoning_content"));
     if (rc && *rc) post_msg(1, rc);
     if (c && *c) post_msg(0, c);
+    { J *tcs = j_get(d, "tool_calls"); if (tcs && tcs->t == J_ARR) tc_delta(tcs); }
     J *t = j_get(r, "timings");
     if (t) {
         char b[200];
@@ -37,6 +38,7 @@ static void stop_gen(void) {
 static DWORD WINAPI worker(LPVOID arg) {
     Job *j = (Job *)arg; Url u; HINTERNET ses = NULL, con = NULL, req = NULL; SB buf = {0};
     wchar_t *hd = NULL; DWORD status = 0, sz = sizeof status, got; char tmp[8192]; size_t blen = strlen(j->body);
+    tc_reset();
     if (!url_parse(j->url, "/v1/chat/completions", &u)) { post_msg(3, "Invalid server URL"); goto done; }
     ses = WinHttpOpen(L"llamac/1.0", WINHTTP_ACCESS_TYPE_NO_PROXY, NULL, NULL, 0);
     if (!ses) { post_msg(3, "WinHttpOpen failed"); goto done; }
@@ -70,6 +72,7 @@ done:
     if (con) WinHttpCloseHandle(con);
     if (ses) WinHttpCloseHandle(ses);
     free(hd); free(buf.p); free(j->body); free(j);
+    { char *tj = g_stop ? NULL : tc_build(); if (tj) { post_msg(5, tj); free(tj); } }
     post_msg(4, "");
     return 0;
 }

@@ -9,9 +9,15 @@ static LRESULT CALLBACK SetProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     case WM_ERASEBKGND: { RECT r; GetClientRect(h, &r); FillRect((HDC)w, &r, hbrPanel); return 1; }
     case WM_CTLCOLORSTATIC: case WM_CTLCOLORBTN: SetTextColor((HDC)w, cFg); SetBkColor((HDC)w, cPanel); return (LRESULT)hbrPanel;
     case WM_CTLCOLOREDIT: SetTextColor((HDC)w, cFg); SetBkColor((HDC)w, cSurf); return (LRESULT)hbrSurf;
-    case WM_DRAWITEM: draw_btn((DRAWITEMSTRUCT *)l); return TRUE;
+    case WM_DRAWITEM: {
+        DRAWITEMSTRUCT *d = (DRAWITEMSTRUCT *)l; UINT oid = d->CtlID;
+        if (oid == IDC_MCPEDIT || oid == IDC_MCPRELOAD) d->CtlID = IDC_RESET;   /* same look as the Reset button */
+        draw_btn(d); d->CtlID = oid; return TRUE;
+    }
     case WM_COMMAND:
-        if (LOWORD(w) == IDC_RESET) {
+        if (LOWORD(w) == IDC_MCPEDIT) { mcp_edit_config(h); }
+        else if (LOWORD(w) == IDC_MCPRELOAD) { mcp_start_async(); }
+        else if (LOWORD(w) == IDC_RESET) {
             for (int i = 0; i < NFIELDS; i++) if (FIELDS[i].kind == 1 && setCtl[i]) SetWindowTextW(setCtl[i], L"");
         } else if (LOWORD(w) == IDOK) {
             for (int i = 0; i < NFIELDS; i++) {
@@ -19,7 +25,7 @@ static LRESULT CALLBACK SetProc(HWND h, UINT m, WPARAM w, LPARAM l) {
                 if (f->kind == 3) *(int *)((char *)&G + f->off) = (SendMessageW(setCtl[i], BM_GETCHECK, 0, 0) == BST_CHECKED);
                 else { char *t = get_text(setCtl[i]); field_set(&G, f, t); free(t); }
             }
-            cfg_save(); set_theme(); render_all(); DestroyWindow(h);
+            cfg_save(); tools_apply_settings(); set_theme(); render_all(); DestroyWindow(h);
         } else if (LOWORD(w) == IDCANCEL) DestroyWindow(h);
         return 0;
     case DM_GETDEFID: return MAKELONG(IDOK, DC_HASDEFID);
@@ -65,8 +71,11 @@ static void show_settings(void) {
         free(lb);
     }
     mkbtn(hSet, L"Reset to server defaults", IDC_RESET);
+    mkbtn(hSet, L"Edit MCP servers...", IDC_MCPEDIT); mkbtn(hSet, L"Reload MCP", IDC_MCPRELOAD);
     mkbtn(hSet, L"OK", IDOK); mkbtn(hSet, L"Cancel", IDCANCEL);
     MoveWindow(GetDlgItem(hSet, IDC_RESET), 20 + colW + 10, CH - 56, 200, 34, TRUE);
+    MoveWindow(GetDlgItem(hSet, IDC_MCPEDIT), 20, CH - 56, 170, 34, TRUE);
+    MoveWindow(GetDlgItem(hSet, IDC_MCPRELOAD), 200, CH - 56, 110, 34, TRUE);
     MoveWindow(GetDlgItem(hSet, IDOK), CW - 190, CH - 56, 80, 34, TRUE);
     MoveWindow(GetDlgItem(hSet, IDCANCEL), CW - 100, CH - 56, 80, 34, TRUE);
     for (HWND c = GetWindow(hSet, GW_CHILD); c; c = GetWindow(c, GW_HWNDNEXT)) if (c != t1 && c != t2) SendMessageW(c, WM_SETFONT, (WPARAM)hFont, TRUE);

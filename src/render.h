@@ -61,6 +61,31 @@ static void render_content(const char *s) {
         p = e + 8; while (*p == '\n' || *p == '\r') p++;
     }
 }
+/* ---------- tool calls and tool results ---------- */
+static const char *role_label(int r) { return r == ROLE_USER ? "You" : r == ROLE_ASSIST ? "Assistant" : r == ROLE_TOOL ? "Tool" : "System"; }
+static void render_tool_result(Node *m) {
+    char h[200]; size_t full = strlen(m->content), n = full;
+    snprintf(h, sizeof h, "\xE2\x96\xB8 %.150s\n", m->tname && *m->tname ? m->tname : "tool");
+    re_add(h, strlen(h), cDim, CFE_BOLD, FACE);
+    if (n > 4000) { n = 4000; while (n && ((unsigned char)m->content[n] & 0xC0) == 0x80) n--; }
+    if (n) re_code(m->content, n, cDim, 0);
+    if (n < full) { const char *t = "\n... (shortened in this view; the model received the full result)"; re_add(t, strlen(t), cDim, CFE_ITALIC, FACE); }
+    re_nl();
+}
+static void render_tool_calls(const char *json) {
+    J *a = json_parse(json);
+    for (J *c = a ? a->child : NULL; c; c = c->next) {
+        J *fn = j_get(c, "function"); const char *nm = j_str(j_get(fn, "name")), *ar = j_str(j_get(fn, "arguments"));
+        SB s = {0}; size_t al = ar ? strlen(ar) : 0;
+        if (al > 300) { al = 300; while (al && ((unsigned char)ar[al] & 0xC0) == 0x80) al--; }
+        sb_puts(&s, "\xE2\x96\xB8 Tool call: "); sb_puts(&s, nm ? nm : "?"); sb_putc(&s, '(');
+        if (ar) sb_add(&s, ar, al);
+        if (ar && al < strlen(ar)) sb_puts(&s, "...");
+        sb_puts(&s, ")\n");
+        re_add(sbs(&s), s.n, cAccent, 0, FACE); free(s.p);
+    }
+    j_free(a);
+}
 static void render_all(void) {
     g_pend.n = 0; if (g_pend.p) g_pend.p[0] = 0;
     SendMessageW(hChat, WM_SETREDRAW, FALSE, 0);
@@ -77,13 +102,14 @@ static void render_all(void) {
         for (int i = 0; i < n; i++) {
             Node *m = &cur->n[p[i]]; char hdr[96]; Node *pn = &cur->n[m->parent]; int pos = 0;
             for (int k = 0; k < pn->nk; k++) if (pn->kids[k] == p[i]) pos = k;
-            snprintf(hdr, sizeof hdr, "\xE2\x97\x8F  %s", m->role == ROLE_USER ? "You" : m->role == ROLE_ASSIST ? "Assistant" : "System");
+            snprintf(hdr, sizeof hdr, "\xE2\x97\x8F  %s", role_label(m->role));
             if (pn->nk > 1) snprintf(hdr + strlen(hdr), sizeof hdr - strlen(hdr), "     \xE2\x80\xB9 %d / %d \xE2\x80\xBA", pos + 1, pn->nk);
-            re_add(hdr, strlen(hdr), m->role == ROLE_USER ? cUser : cAsst, CFE_BOLD, FACE); re_nl();
+            re_add(hdr, strlen(hdr), m->role == ROLE_USER ? cUser : m->role == ROLE_TOOL ? cDim : cAsst, CFE_BOLD, FACE); re_nl();
             for (int k = 0; k < m->na; k++) { char b[300]; snprintf(b, sizeof b, "\xE2\x96\xAB %s\n", m->att[k].name); re_add(b, strlen(b), cDim, 0, FACE); }
             g_rnode = p[i];
             if (G.thoughts) render_think(m->reasoning, strlen(m->reasoning));
-            render_content(m->content);
+            if (m->role == ROLE_TOOL) render_tool_result(m);
+            else { render_content(m->content); if (m->tcalls && *m->tcalls) render_tool_calls(m->tcalls); }
             if (!(busy && cur == genConv && p[i] == genNode)) { re_nl(); if (i + 1 < n) { re_rule(cBorder); } }
         }
         free(p);

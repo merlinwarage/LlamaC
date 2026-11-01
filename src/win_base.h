@@ -31,6 +31,7 @@
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "dwmapi.lib")
 #pragma comment(lib, "uxtheme.lib")
+#pragma comment(lib, "ole32.lib")
 #pragma comment(linker, "/SUBSYSTEM:WINDOWS")
 #pragma comment(linker, "\"/manifestdependency:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"")
 
@@ -41,11 +42,11 @@
 enum { IDC_SEARCH = 101, IDC_LIST, IDC_CHAT, IDC_INPUT, IDC_STATUS, IDC_MODEL,
        IDC_NEW = 110, IDC_DELC, IDC_EXP, IDC_IMP, IDC_SET, IDC_REFRESH,
        IDC_ATTACH = 120, IDC_REGEN, IDC_EDIT, IDC_DELM, IDC_PREV, IDC_NEXT, IDC_COPY, IDC_SEND,
-       IDC_FIND = 130, IDC_SIDEBAR, IDC_TEMPLATE, IDC_RESET };
+       IDC_FIND = 130, IDC_SIDEBAR, IDC_TEMPLATE, IDC_RESET, IDC_MCPEDIT, IDC_MCPRELOAD };
 #define WM_APP_MSG (WM_APP + 1)
 #define WM_APP_INIT (WM_APP + 2)
 
-typedef struct { int kind; char *text; } Msg; /* 0 content,1 reasoning,2 stats,3 error,4 done */
+typedef struct { int kind; char *text; } Msg; /* 0 content,1 reasoning,2 stats,3 error,4 done,5 tool_calls,6 tool result,8 tools finished,9 status */
 
 static HWND hMain, hSearch, hList, hChat, hInput, hStatus, hModel, hHot;
 static HFONT hFont, hFontB, hFontT;

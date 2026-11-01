@@ -3,7 +3,7 @@
 #define LLAMAC_CHAT_TREE_H
 
 /* ======================= chat tree ======================= */
-enum { ROLE_USER, ROLE_ASSIST, ROLE_SYS, ROLE_ROOT };
+enum { ROLE_USER, ROLE_ASSIST, ROLE_SYS, ROLE_ROOT, ROLE_TOOL };
 enum { ATT_IMAGE, ATT_TEXT, ATT_AUDIO };
 typedef struct { int kind; char *name, *data, *mime; } Att;
 typedef struct {
@@ -13,6 +13,8 @@ typedef struct {
     Att *att; int na;
     long long ts;
     int think_open;
+    char *tcalls;            /* assistant: OpenAI tool_calls array as JSON text (NULL = none) */
+    char *tcid, *tname;      /* tool result: tool_call_id and tool name */
 } Node;
 typedef struct { char id[40]; char *name; long long mod; Node *n; int cnt, cap, root, leaf; } Conv;
 
@@ -45,7 +47,7 @@ static Conv *conv_new(void) {
 static void conv_free(Conv *c) {
     for (int i = 0; i < c->cnt; i++) {
         Node *n = &c->n[i];
-        free(n->content); free(n->reasoning); free(n->kids);
+        free(n->content); free(n->reasoning); free(n->kids); free(n->tcalls); free(n->tcid); free(n->tname);
         for (int k = 0; k < n->na; k++) { free(n->att[k].name); free(n->att[k].data); free(n->att[k].mime); }
         free(n->att);
     }

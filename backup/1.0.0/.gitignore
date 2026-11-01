@@ -1,0 +1,9 @@
+release/
+dist/ 
+*.obj
+*.exe
+*.pdb
+*.ilk
+*.exp
+*.lib
+*.manifest

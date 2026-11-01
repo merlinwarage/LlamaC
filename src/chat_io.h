@@ -31,12 +31,14 @@ static void conv_json(SB *s, Conv *c) {
         for (int k = 0; k < m->nk; k++) { if (k) sb_putc(s, ','); sb_json(s, c->n[m->kids[k]].id); }
         sb_puts(s, "]");
         if (m->na) { sb_puts(s, ",\"extra\":["); for (int k = 0; k < m->na; k++) { if (k) sb_putc(s, ','); att_json(s, &m->att[k]); } sb_putc(s, ']'); }
+        if (m->tcalls && *m->tcalls) { sb_puts(s, ",\"toolCalls\":"); sb_json(s, m->tcalls); }
+        if (m->role == ROLE_TOOL) { sb_puts(s, ",\"toolCallId\":"); sb_json(s, m->tcid ? m->tcid : ""); sb_puts(s, ",\"toolName\":"); sb_json(s, m->tname ? m->tname : ""); }
         sb_putc(s, '}');
     }
     sb_puts(s, "]}");
     free(mark); free(st);
 }
-static int role_from(const char *r) { if (!r) return ROLE_USER; if (!strcmp(r, "assistant")) return ROLE_ASSIST; if (!strcmp(r, "system")) return ROLE_SYS; return ROLE_USER; }
+static int role_from(const char *r) { if (!r) return ROLE_USER; if (!strcmp(r, "assistant")) return ROLE_ASSIST; if (!strcmp(r, "system")) return ROLE_SYS; if (!strcmp(r, "tool")) return ROLE_TOOL; return ROLE_USER; }
 static Conv *conv_from_json(J *o, int newid) {
     J *cj = j_get(o, "conv"), *ms = j_get(o, "messages");
     if (!cj || !ms || ms->t != J_ARR) return NULL;
@@ -53,6 +55,9 @@ static Conv *conv_from_json(J *o, int newid) {
         if ((s = j_str(j_get(e, "id"))) != NULL) { strncpy(nd->id, s, 39); nd->id[39] = 0; }
         if ((s = j_str(j_get(e, "content"))) != NULL) setstr(&nd->content, s);
         if ((s = j_str(j_get(e, "reasoningContent"))) != NULL) setstr(&nd->reasoning, s);
+        if ((s = j_str(j_get(e, "toolCalls"))) != NULL && *s) setstr(&nd->tcalls, s);
+        if ((s = j_str(j_get(e, "toolCallId"))) != NULL) setstr(&nd->tcid, s);
+        if ((s = j_str(j_get(e, "toolName"))) != NULL) setstr(&nd->tname, s);
         nd->ts = (long long)j_num(j_get(e, "timestamp"), (double)nd->ts);
         pids[idx] = j_str(j_get(e, "parent"));
         if (isroot && c->root < 0) c->root = idx;

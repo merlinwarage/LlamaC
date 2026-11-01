@@ -4,16 +4,19 @@
 
 /* ---------- chat actions ---------- */
 static void set_busy(int b) { busy = b; SetWindowTextW(B(IDC_SEND), b ? L"Stop" : L"Send"); InvalidateRect(B(IDC_SEND), NULL, FALSE); }
-static void start_gen(int parent) {
+static int g_toolround;   /* tool rounds used for the current user message */
+static void start_gen_ex(int parent, int cont) {
+    if (!cont) g_toolround = 0;
     cur->leaf = parent;
     int a = node_add(cur, parent, ROLE_ASSIST); cur->leaf = a;
     Job *j = (Job *)calloc(1, sizeof *j);
     j->body = build_request(cur, &G); strncpy(j->url, G.url, 255); strncpy(j->key, G.key, 255);
     genConv = cur; genNode = a; genPhase = 0; g_stop = 0; gl[0] = gl[1] = 0; gc[0] = gc[1] = 1; set_busy(1);
     cur->mod = now_ms();
-    render_all(); set_status("Generating...");
+    render_all(); set_status(cont ? "Generating (after tool results)..." : "Generating...");
     HANDLE h = CreateThread(NULL, 0, worker, j, 0, NULL); if (h) CloseHandle(h);
 }
+static void start_gen(int parent) { start_gen_ex(parent, 0); }
 static void do_send(void) {
     if (busy) { stop_gen(); return; }
     if (!cur) new_chat();
@@ -37,7 +40,7 @@ static void do_send(void) {
 static void act_regen(void) {
     if (busy || !cur || cur->leaf == cur->root) return;
     Node *l = &cur->n[cur->leaf];
-    if (l->role == ROLE_ASSIST) start_gen(l->parent); else if (l->role == ROLE_USER) start_gen(cur->leaf);
+    if (l->role == ROLE_ASSIST) start_gen(l->parent); else if (l->role == ROLE_USER || l->role == ROLE_TOOL) start_gen(cur->leaf);
 }
 static void act_edit(void) {
     if (busy || !cur) return;
