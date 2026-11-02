@@ -54,12 +54,27 @@ static void handle_line(char *ln)
     J *t = j_get(r, "timings");
     if (t)
     {
-        char b[200];
+        char b[260];
         int pn = (int)j_num(j_get(t, "prompt_n"), 0);
         int gn = (int)j_num(j_get(t, "predicted_n"), 0);
-        snprintf(b, sizeof b, "prompt %d tok @ %.1f t/s   |   generated %d tok @ %.1f t/s",
-                 pn, j_num(j_get(t, "prompt_per_second"), 0),
-                 gn, j_num(j_get(t, "predicted_per_second"), 0));
+        if (g_nctx > 0)
+        {
+            int used = pn + gn, free_ctx = g_nctx - used;
+            if (free_ctx < 0)
+                free_ctx = 0;
+            snprintf(b, sizeof b,
+                     "prompt %d tok @ %.1f t/s   |   generated %d tok @ %.1f t/s   |   ctx %d / %d (%d free)",
+                     pn, j_num(j_get(t, "prompt_per_second"), 0),
+                     gn, j_num(j_get(t, "predicted_per_second"), 0),
+                     used, g_nctx, free_ctx);
+        }
+        else
+        {
+            snprintf(b, sizeof b,
+                     "prompt %d tok @ %.1f t/s   |   generated %d tok @ %.1f t/s",
+                     pn, j_num(j_get(t, "prompt_per_second"), 0),
+                     gn, j_num(j_get(t, "predicted_per_second"), 0));
+        }
         g_last_prompt_n = pn;
         g_last_pred_n = gn;
         post_msg(2, b);
