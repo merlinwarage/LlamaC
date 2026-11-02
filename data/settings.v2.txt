@@ -26,3 +26,5 @@ freq=
 dry=
 maxtok=
 seed=
+ctxlimit=
+autocompact=1

@@ -39,14 +39,43 @@
 #define HBAR "\xE2\x94\x80"
 #define VBAR "\xE2\x94\x82"
 #define CROSS "\xE2\x94\xBC"
-enum { IDC_SEARCH = 101, IDC_LIST, IDC_CHAT, IDC_INPUT, IDC_STATUS, IDC_MODEL,
-       IDC_NEW = 110, IDC_DELC, IDC_EXP, IDC_IMP, IDC_SET, IDC_REFRESH,
-       IDC_ATTACH = 120, IDC_REGEN, IDC_EDIT, IDC_DELM, IDC_PREV, IDC_NEXT, IDC_COPY, IDC_SEND,
-       IDC_FIND = 130, IDC_SIDEBAR, IDC_TEMPLATE, IDC_RESET, IDC_MCPEDIT, IDC_MCPRELOAD };
+enum
+{
+    IDC_SEARCH = 101,
+    IDC_LIST,
+    IDC_CHAT,
+    IDC_INPUT,
+    IDC_STATUS,
+    IDC_MODEL,
+    IDC_NEW = 110,
+    IDC_DELC,
+    IDC_EXP,
+    IDC_IMP,
+    IDC_SET,
+    IDC_REFRESH,
+    IDC_ATTACH = 120,
+    IDC_REGEN,
+    IDC_EDIT,
+    IDC_DELM,
+    IDC_PREV,
+    IDC_NEXT,
+    IDC_COPY,
+    IDC_SEND,
+    IDC_FIND = 130,
+    IDC_SIDEBAR,
+    IDC_TEMPLATE,
+    IDC_RESET,
+    IDC_MCPEDIT,
+    IDC_MCPRELOAD
+};
 #define WM_APP_MSG (WM_APP + 1)
 #define WM_APP_INIT (WM_APP + 2)
 
-typedef struct { int kind; char *text; } Msg; /* 0 content,1 reasoning,2 stats,3 error,4 done,5 tool_calls,6 tool result,8 tools finished,9 status */
+typedef struct
+{
+    int kind;
+    char *text;
+} Msg; /* 0 content,1 reasoning,2 stats,3 error,4 done,5 tool_calls,6 tool result,8 tools finished,9 status */
 
 static HWND hMain, hSearch, hList, hChat, hInput, hStatus, hModel, hHot;
 static HFONT hFont, hFontB, hFontT;
@@ -57,17 +86,25 @@ static COLORREF cKw, cStr, cCom, cNum, cFn, cType, cCodeHdr;
 static Cfg G;
 static char srvdef[NFIELDS][32];
 static char *g_tmpl;
-static Conv **convs; static int nconv; static Conv *cur;
-static int *lmap; static int nmap;
-static Att pend[16]; static int npend;
+static Conv **convs;
+static int nconv;
+static Conv *cur;
+static int *lmap;
+static int nmap;
+static Att pend[16];
+static int npend;
 static volatile LONG busy, g_stop;
 static volatile HINTERNET g_req;
-static Conv *genConv; static int genNode, genPhase;
+static Conv *genConv;
+static int genNode, genPhase;
 static wchar_t dataDir[MAX_PATH];
 static int sbVisible = 1, g_colw = 800;
 static RECT rcSide, rcSearch, rcHead, rcBox, rcTitle;
 static WNDPROC oldInput;
 static const wchar_t *FACE = L"Segoe UI", *MONO = L"Consolas";
+static int g_nctx; /* context window from /props, 0 = unknown */
+static int g_last_prompt_n, g_last_pred_n;
+static int g_compacting;
 #define PT 10
 
 #endif /* LLAMAC_WIN_BASE_H */
