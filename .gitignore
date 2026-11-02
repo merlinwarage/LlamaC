@@ -1,6 +1,7 @@
 release/
 dist/ 
 backup/
+.vscode/
 *.obj
 *.exe
 *.pdb
@@ -9,3 +10,4 @@ backup/
 *.lib
 *.manifest
 MEMORY.md
+data/chats.json
