@@ -110,6 +110,18 @@ cl /O2 /W3 /utf-8 llamac.c
 
 or run `build.bat`. Link libraries are pulled in through `#pragma comment`, so no extra flags are needed. The version string is `LLAMAC_VERSION` at the top of `llamac.c`.
 
+### File tools fail with "Win32 error 5"
+
+If write_file reports `Win32 error 5` and the diagnostic shows `integrity=0x1000`,
+llamac is running at Low integrity, usually because the exe or its folder has a Low
+mandatory label (some sandboxing tools leave one behind). Check with
+`icacls llamac.exe` and look for `Mandatory Label\Low Mandatory Level`, then
+relabel the folder from an elevated prompt:
+
+    icacls "<project folder>" /setintegritylevel "(OI)(CI)M" /T /C
+
+Then rebuild.
+
 ## Keyboard shortcuts
 
 | Shortcut       | Action         |
