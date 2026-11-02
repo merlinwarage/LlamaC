@@ -169,6 +169,7 @@ src/
   tools_fs.h        sandboxed file tools
   settings_ui.h     settings dialog
   main_window.h     window procedure, layout, WinMain
+  compact.h         chat compression
 ```
 
 The portable modules (`util`, `json`, `config`, `chat_tree`, `tools_core`, `request`) use no Windows APIs.
