@@ -4,6 +4,14 @@
 
 /* ---------- settings window (values left empty = use llama-server's own) ---------- */
 static HWND hSet, setCtl[NFIELDS]; static int setDone;
+/* stored text uses \n; the edit control needs \r\n */
+static wchar_t *sys_to_edit(const char *u) {
+    SB c = {0}; wchar_t *w;
+    for (; *u; u++) { if (*u == '\r') continue; if (*u == '\n') sb_putc(&c, '\r'); sb_putc(&c, *u); }
+    w = w_from(c.p ? sbs(&c) : ""); free(c.p); return w;
+}
+static void strip_cr(char *s) { char *d = s; for (; *s; s++) if (*s != '\r') *d++ = *s; *d = 0; }
+
 static LRESULT CALLBACK SetProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     switch (m) {
     case WM_ERASEBKGND: { RECT r; GetClientRect(h, &r); FillRect((HDC)w, &r, hbrPanel); return 1; }
@@ -23,7 +31,7 @@ static LRESULT CALLBACK SetProc(HWND h, UINT m, WPARAM w, LPARAM l) {
             for (int i = 0; i < NFIELDS; i++) {
                 const Field *f = &FIELDS[i]; if (!f->label) continue;
                 if (f->kind == 3) *(int *)((char *)&G + f->off) = (SendMessageW(setCtl[i], BM_GETCHECK, 0, 0) == BST_CHECKED);
-                else { char *t = get_text(setCtl[i]); field_set(&G, f, t); free(t); }
+                else { char *t = get_text(setCtl[i]); if (!strcmp(f->key, "sys")) strip_cr(t); field_set(&G, f, t); free(t); }
             }
             cfg_save(); tools_apply_settings(); set_theme(); render_all(); DestroyWindow(h);
         } else if (LOWORD(w) == IDCANCEL) DestroyWindow(h);
@@ -41,8 +49,9 @@ static void show_settings(void) {
         wc.hCursor = LoadCursorW(NULL, IDC_ARROW); wc.lpszClassName = L"LCSet"; RegisterClassExW(&wc); reg = 1;
     }
     const int colW = 450, labW = 170, rowH = 32; int rowsL = 0, rowsR = 0;
+    const int sysExtra = 110; int sysShift = 0;    /* extra height for the system prompt box */
     for (int i = 0; i < NFIELDS; i++) if (FIELDS[i].label) { if (FIELDS[i].kind == 1) rowsR++; else rowsL++; }
-    int rows = rowsL > rowsR ? rowsL : rowsR, CW = colW * 2 + 40, CH = 44 + rows * rowH + 80;
+    int rows = rowsL > rowsR ? rowsL : rowsR, CW = colW * 2 + 40, CH = 44 + rows * rowH + 80 + sysExtra;
     RECT wr = { 0, 0, CW, CH }; DWORD st = WS_POPUP | WS_CAPTION | WS_SYSMENU; AdjustWindowRectEx(&wr, st, FALSE, WS_EX_DLGMODALFRAME);
     RECT r; GetWindowRect(hMain, &r);
     hSet = CreateWindowExW(WS_EX_DLGMODALFRAME, L"LCSet", L"Settings", st, r.left + 60, r.top + 40, wr.right - wr.left, wr.bottom - wr.top, hMain, NULL, GetModuleHandleW(NULL), NULL);
@@ -53,22 +62,34 @@ static void show_settings(void) {
     int rl = 0, rr = 0;
     for (int i = 0; i < NFIELDS; i++) {
         const Field *f = &FIELDS[i]; if (!f->label) continue;
-        int col = (f->kind == 1), x = 20 + col * (colW + 10), y = 44 + (col ? rr++ : rl++) * rowH; wchar_t *lb = w_from(f->label);
+        int col = (f->kind == 1), x = 20 + col * (colW + 10), y = 44 + (col ? rr++ : rl++) * rowH + (col ? 0 : sysShift);
+        wchar_t *lb = w_from(f->label);
         if (f->kind == 3) {
             setCtl[i] = CreateWindowExW(0, L"BUTTON", lb, WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, x, y, colW - 10, 24, hSet, NULL, NULL, NULL);
             SetWindowTheme(setCtl[i], L"", L"");
             SendMessageW(setCtl[i], BM_SETCHECK, *(int *)((char *)&G + f->off) ? BST_CHECKED : BST_UNCHECKED, 0);
         } else {
+            int isSys = !strcmp(f->key, "sys");
             CreateWindowExW(0, L"STATIC", lb, WS_CHILD | WS_VISIBLE | SS_NOPREFIX, x, y + 4, labW, 20, hSet, NULL, NULL, NULL);
-            SB v = {0}; field_get(&G, f, &v); wchar_t *wv = w_from(sbs(&v));
-            setCtl[i] = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", wv, WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL, x + labW, y, colW - labW - 10, 24, hSet, NULL, NULL, NULL);
+            SB v = {0}; field_get(&G, f, &v);
+            wchar_t *wv = isSys ? sys_to_edit(G.sys) : w_from(sbs(&v));
+            if (isSys) {
+                setCtl[i] = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", wv,
+                    WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN,
+                    x + labW, y, colW - labW - 10, 24 + sysExtra, hSet, NULL, NULL, NULL);
+                SendMessageW(setCtl[i], EM_SETLIMITTEXT, (WPARAM)(sizeof G.sys - 1), 0);
+                SendMessageW(setCtl[i], EM_SETCUEBANNER, TRUE, (LPARAM)L"Instructions sent to the model at the start of every chat");
+                sysShift += sysExtra;
+            } else {
+                setCtl[i] = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", wv, WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL, x + labW, y, colW - labW - 10, 24, hSet, NULL, NULL, NULL);
+            }
             if (f->kind == 1) {
                 char cue[80]; snprintf(cue, sizeof cue, "%s%s", srvdef[i][0] ? "server: " : "server default", srvdef[i]);
                 wchar_t *wc = w_from(cue); SendMessageW(setCtl[i], EM_SETCUEBANNER, TRUE, (LPARAM)wc); free(wc);
             }
             free(wv); free(v.p);
+            free(lb);
         }
-        free(lb);
     }
     mkbtn(hSet, L"Reset to server defaults", IDC_RESET);
     mkbtn(hSet, L"Edit MCP servers...", IDC_MCPEDIT); mkbtn(hSet, L"Reload MCP", IDC_MCPRELOAD);

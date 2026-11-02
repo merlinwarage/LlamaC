@@ -18,7 +18,7 @@ static const Field FIELDS[] = {
     FLD("url", "Server URL", 0, url, NULL, NULL),
     FLD("key", "API key", 0, key, NULL, NULL),
     FLD("model", NULL, 0, model, NULL, NULL),
-    FLD("sys", "System message", 0, sys, NULL, NULL),
+    FLD("sys", "System prompt", 0, sys, NULL, NULL),
     FLD("kwargs", "Jinja template kwargs (JSON)", 0, kwargs, NULL, NULL),
     FLD("rfmt", "Reasoning format (auto/none/deepseek)", 0, rfmt, NULL, NULL),
     FLD("stop", "Stop strings (separate with |)", 0, stop, NULL, NULL),
