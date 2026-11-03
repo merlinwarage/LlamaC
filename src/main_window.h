@@ -408,7 +408,7 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l)
                 sb_puts(&g_pend, g->text);
                 if (!g_timer_on)
                 {
-                    SetTimer(h, 1, 33, NULL);
+                    SetTimer(h, 1, flush_interval(), NULL);
                     g_timer_on = 1;
                 }
             }
@@ -591,9 +591,14 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l)
     case WM_TIMER:
         if (w == 1)
         {
-            KillTimer(h, 1);
-            g_timer_on = 0;
-            flush_stream();
+            flush_step();
+            if (g_pend.n)
+                SetTimer(h, 1, flush_interval(), NULL); /* more waiting: next tick, spaced by the measured cost */
+            else
+            {
+                KillTimer(h, 1);
+                g_timer_on = 0;
+            }
         }
         else if (w == 2)
         {

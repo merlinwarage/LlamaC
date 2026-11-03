@@ -72,9 +72,73 @@ static int at_bottom(void)
     GetScrollInfo(hChat, SB_VERT, &si);
     return si.nPos + (int)si.nPage >= si.nMax - 8;
 }
-static void flush_stream(void)
+/* offset of the end of the chat text (where the next re_add() writes) */
+static LONG re_len(void)
 {
-    if (g_pend.n && cur && cur == genConv)
+    CHARRANGE cr;
+    SendMessageW(hChat, EM_SETSEL, (WPARAM)-1, (LPARAM)-1);
+    SendMessageW(hChat, EM_EXGETSEL, 0, (LPARAM)&cr);
+    return cr.cpMin;
+}
+
+/* ---------- live markdown while streaming ----------
+   The answer first appears as plain text (fast). As soon as a unit is complete - a line, a closed ``` code block,
+   a finished table - the plain text of that unit is replaced by its final markdown rendering. Only the open
+   unit at the end stays plain, so there is no big jump when the answer finishes. */
+static SB g_live;             /* answer text shown so far (since live tracking began) */
+static size_t g_live_done;    /* bytes of g_live already rendered as markdown */
+static LONG g_live_off = -1;  /* chat offset where the plain tail starts; < 0 = not tracking yet */
+static int g_live_stop;       /* <think> tags in the answer: leave everything to the final render */
+static void live_reset(void)
+{
+    g_live.n = 0;
+    if (g_live.p)
+        g_live.p[0] = 0;
+    g_live_done = 0;
+    g_live_off = -1;
+    g_live_stop = 0;
+}
+static void live_commit(void)
+{
+    size_t end;
+    char *seg;
+    if (g_live_stop || g_live_off < 0 || !g_live.n)
+        return;
+    end = tx_block_end(g_live.p, g_live_done, g_live.n);
+    if (end <= g_live_done)
+        return;
+    seg = xstrndup(g_live.p + g_live_done, end - g_live_done);
+    if (strstr(seg, "think>"))
+    { /* render_content() has to see a <think> block as a whole */
+        g_live_stop = 1;
+        free(seg);
+        return;
+    }
+    SendMessageW(hChat, WM_SETREDRAW, FALSE, 0);
+    SendMessageW(hChat, EM_SETSEL, (WPARAM)g_live_off, (LPARAM)-1);
+    SendMessageW(hChat, EM_REPLACESEL, FALSE, (LPARAM)L""); /* drop the plain tail */
+    md_render(seg, cFg);
+    g_live_off = re_len();
+    if (g_live.n > end)
+        re_add(g_live.p + end, g_live.n - end, cFg, 0, FACE); /* the open unit stays plain */
+    g_live_done = end;
+    SendMessageW(hChat, WM_SETREDRAW, TRUE, 0);
+    InvalidateRect(hChat, NULL, FALSE);
+    free(seg);
+}
+
+/* show at most maxb bytes of the pending text (never splits a UTF-8 character); the rest waits for the next tick */
+static void flush_stream_n(size_t maxb)
+{
+    size_t n = g_pend.n, emit = n;
+    int show = (n && cur && cur == genConv);
+    if (emit > maxb)
+    {
+        emit = maxb;
+        while (emit < n && ((unsigned char)g_pend.p[emit] & 0xC0) == 0x80)
+            emit++;
+    }
+    if (show)
     {
         int follow = at_bottom();
         if (g_pend_kind == 1)
@@ -84,7 +148,7 @@ static void flush_stream(void)
                 re_add("Thinking\n", 9, cDim, CFE_ITALIC | CFE_BOLD, FACE);
                 genPhase = 1;
             }
-            re_add(g_pend.p, g_pend.n, cDim, CFE_ITALIC, FACE);
+            re_add(g_pend.p, emit, cDim, CFE_ITALIC, FACE);
         }
         else
         {
@@ -94,14 +158,57 @@ static void flush_stream(void)
                 re_nl();
             }
             genPhase = 2;
-            re_add(g_pend.p, g_pend.n, cFg, 0, FACE);
+            if (g_live_off < 0)
+                g_live_off = re_len();
+            re_add(g_pend.p, emit, cFg, 0, FACE);
+            sb_add(&g_live, g_pend.p, emit);
+            live_commit();
         }
         if (follow)
             SendMessageW(hChat, WM_VSCROLL, SB_BOTTOM, 0);
     }
-    g_pend.n = 0;
+    else
+        emit = n; /* not the visible chat: drop the pending text */
+    if (emit >= g_pend.n)
+        g_pend.n = 0;
+    else
+    {
+        memmove(g_pend.p, g_pend.p + emit, g_pend.n - emit);
+        g_pend.n -= emit;
+    }
     if (g_pend.p)
-        g_pend.p[0] = 0;
+        g_pend.p[g_pend.n] = 0;
+}
+static void flush_stream(void) { flush_stream_n((size_t)-1); } /* show everything now */
+
+/* tick scheduler: spaces ticks by the measured cost of a flush so the UI thread never saturates */
+static double g_flush_ms;
+static UINT flush_interval(void)
+{
+    double t = g_flush_ms * 3;
+    return (UINT)(t < 16 ? 16 : t > 250 ? 250 : t);
+}
+static void flush_step(void)
+{
+    LARGE_INTEGER f, a, b;
+    UINT iv = flush_interval();
+    size_t q = g_pend.n * iv / 100; /* drain the backlog in about 100 ms whatever the tick rate */
+    double ms;
+    if (q < 24)
+        q = 24;
+    QueryPerformanceFrequency(&f);
+    QueryPerformanceCounter(&a);
+    flush_stream_n(q);
+    QueryPerformanceCounter(&b);
+    ms = (double)(b.QuadPart - a.QuadPart) * 1000.0 / (double)f.QuadPart;
+    g_flush_ms = g_flush_ms * 0.8 + ms * 0.2;
+#ifdef LLAMAC_PROFILE
+    {
+        wchar_t t[120];
+        _snwprintf(t, 120, L"flush %.1f ms (avg %.1f)  chat %d chars", ms, g_flush_ms, GetWindowTextLengthW(hChat));
+        SetWindowTextW(hMain, t);
+    }
+#endif
 }
 
 /* <think>...</think> inside the content (reasoning_format = none) is shown as a dim thinking block */
@@ -197,13 +304,6 @@ typedef struct
 } RdNode;
 static RdNode *g_rd;
 static int g_rdn, g_rdcap, g_rd_key = -1;
-static LONG re_len(void)
-{
-    CHARRANGE cr;
-    SendMessageW(hChat, EM_SETSEL, (WPARAM)-1, (LPARAM)-1);
-    SendMessageW(hChat, EM_EXGETSEL, 0, (LPARAM)&cr);
-    return cr.cpMin;
-}
 static void blocks_trunc(int nb, int nl, int nt)
 {
     for (int i = nb; i < nblk; i++)
@@ -260,6 +360,7 @@ static void render_all(void)
     g_pend.n = 0;
     if (g_pend.p)
         g_pend.p[0] = 0;
+    live_reset(); /* whatever was streamed is re-rendered from the node below */
     if (cur)
         n = conv_path(cur, &p);
     if (cur && cur == g_rd_conv && key == g_rd_key && n > 0 && g_rdn > 0)

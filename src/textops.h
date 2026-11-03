@@ -1,4 +1,4 @@
-/* textops.h - portable text helpers for the file tools: line numbering, edit snippets, mismatch hints, grep (needs util.h, regex.h) */
+/* textops.h - portable text helpers for the file tools and the chat view (needs util.h, regex.h) */
 #ifndef LLAMAC_TEXTOPS_H
 #define LLAMAC_TEXTOPS_H
 
@@ -148,6 +148,58 @@ static int tx_grep_buf(SB *out, const char *rel, const char *buf, size_t len, Rx
     free(st);
     free(hit);
     return matches;
+}
+
+/* ---------- streaming markdown ----------
+   md_render() works line by line, except for ``` fences (a block up to the closing fence) and tables (consecutive lines
+   starting with '|'). So text can be rendered as final markdown as soon as these units are complete.
+   Returns the end offset of the last complete unit inside s[from..n), or 'from' when there is none.
+   Only lines that already ended with '\n' are considered; s[from] must not be inside a fence. */
+static size_t tx_block_end(const char *s, size_t from, size_t n)
+{
+    size_t i = from, best = from, tstart = (size_t)-1;
+    int fence = 0;
+    while (i < n)
+    {
+        const char *nlp = (const char *)memchr(s + i, '\n', n - i);
+        size_t e, a;
+        int fence_line, table_line;
+        if (!nlp)
+            break;
+        e = (size_t)(nlp - s);
+        a = i;
+        while (a < e && (s[a] == ' ' || s[a] == '\t'))
+            a++;
+        fence_line = (e - a >= 3 && !strncmp(s + a, "```", 3));
+        if (fence)
+        {
+            if (fence_line)
+            {
+                fence = 0;
+                best = e + 1;
+            }
+        }
+        else
+        {
+            table_line = (a < e && s[a] == '|');
+            if (tstart != (size_t)-1 && !table_line)
+            {
+                best = i; /* the table above is complete */
+                tstart = (size_t)-1;
+            }
+            if (fence_line)
+                fence = 1;
+            else if (table_line)
+            {
+                if (tstart == (size_t)-1)
+                    tstart = i;
+            }
+            else
+                best = e + 1;
+        }
+        i = e + 1;
+    }
+    return best;
 }
 
 #endif /* LLAMAC_TEXTOPS_H */
