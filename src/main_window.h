@@ -600,6 +600,14 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l)
                 g_timer_on = 0;
             }
         }
+        else if (w == 3)
+        {
+            if (!fade_tick())
+            {
+                KillTimer(h, 3);
+                g_fade_timer = 0;
+            }
+        }
         else if (w == 2)
         {
             KillTimer(h, 2);

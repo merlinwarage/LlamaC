@@ -81,14 +81,96 @@ static LONG re_len(void)
     return cr.cpMin;
 }
 
+/* ---------- fade-in ----------
+   New text is inserted in the background colour and then recoloured towards the text colour in a few steps.
+   Only the last ~240 ms of text is touched, so the cost stays small and constant. */
+#define FADE_STEPS 6
+#define FADE_MS 240
+#define FADE_MAX 48
+typedef struct
+{
+    LONG a, b;
+    DWORD t0;
+    int step;
+} Fade;
+static Fade g_fade[FADE_MAX];
+static int g_nfade, g_fade_timer;
+static COLORREF fade_col(int step) /* 0 = background, FADE_STEPS = text colour; ease-out */
+{
+    int f = FADE_STEPS * FADE_STEPS - (FADE_STEPS - step) * (FADE_STEPS - step), d = FADE_STEPS * FADE_STEPS;
+    int r = GetRValue(cBg) + (GetRValue(cFg) - GetRValue(cBg)) * f / d;
+    int g = GetGValue(cBg) + (GetGValue(cFg) - GetGValue(cBg)) * f / d;
+    int b = GetBValue(cBg) + (GetBValue(cFg) - GetBValue(cBg)) * f / d;
+    return RGB(r, g, b);
+}
+static void fade_apply(LONG a, LONG b, COLORREF col)
+{
+    CHARFORMAT2W cf;
+    memset(&cf, 0, sizeof cf);
+    cf.cbSize = sizeof cf;
+    cf.dwMask = CFM_COLOR;
+    cf.crTextColor = col;
+    SendMessageW(hChat, EM_SETSEL, (WPARAM)a, (LPARAM)b);
+    SendMessageW(hChat, EM_SETCHARFORMAT, SCF_SELECTION, (LPARAM)&cf);
+}
+static void fade_clear(void) { g_nfade = 0; }
+static void fade_add(LONG a, LONG b)
+{
+    if (b <= a)
+        return;
+    if (g_nfade == FADE_MAX)
+    { /* too many at once: show the oldest one fully */
+        fade_apply(g_fade[0].a, g_fade[0].b, cFg);
+        memmove(g_fade, g_fade + 1, (FADE_MAX - 1) * sizeof(Fade));
+        g_nfade--;
+    }
+    g_fade[g_nfade].a = a;
+    g_fade[g_nfade].b = b;
+    g_fade[g_nfade].t0 = GetTickCount();
+    g_fade[g_nfade].step = 0;
+    g_nfade++;
+}
+/* advances every fade; returns 1 while any is still running */
+static int fade_tick(void)
+{
+    DWORD now = GetTickCount();
+    int n = 0, changed = 0;
+    for (int i = 0; i < g_nfade; i++)
+    {
+        Fade f = g_fade[i];
+        int step = (int)((now - f.t0) * FADE_STEPS / FADE_MS);
+        if (step > FADE_STEPS)
+            step = FADE_STEPS;
+        if (step != f.step)
+        {
+            if (!changed)
+            {
+                SendMessageW(hChat, WM_SETREDRAW, FALSE, 0);
+                changed = 1;
+            }
+            fade_apply(f.a, f.b, step >= FADE_STEPS ? cFg : fade_col(step));
+            f.step = step;
+        }
+        if (step < FADE_STEPS)
+            g_fade[n++] = f;
+    }
+    g_nfade = n;
+    if (changed)
+    {
+        SendMessageW(hChat, WM_SETREDRAW, TRUE, 0);
+        InvalidateRect(hChat, NULL, FALSE);
+    }
+    return n > 0;
+}
+
 /* ---------- live markdown while streaming ----------
    The answer first appears as plain text (fast). As soon as a unit is complete - a line, a closed ``` code block,
    a finished table - the plain text of that unit is replaced by its final markdown rendering. Only the open
    unit at the end stays plain, so there is no big jump when the answer finishes. */
-static SB g_live;             /* answer text shown so far (since live tracking began) */
-static size_t g_live_done;    /* bytes of g_live already rendered as markdown */
-static LONG g_live_off = -1;  /* chat offset where the plain tail starts; < 0 = not tracking yet */
-static int g_live_stop;       /* <think> tags in the answer: leave everything to the final render */
+static SB g_live;            /* answer text shown so far (since live tracking began) */
+static size_t g_live_done;   /* bytes of g_live already rendered as markdown */
+static LONG g_live_off = -1; /* chat offset where the plain tail starts; < 0 = not tracking yet */
+static int g_live_stop;      /* <think> tags in the answer: leave everything to the final render */
 static void live_reset(void)
 {
     g_live.n = 0;
@@ -97,6 +179,7 @@ static void live_reset(void)
     g_live_done = 0;
     g_live_off = -1;
     g_live_stop = 0;
+    fade_clear();
 }
 static void live_commit(void)
 {
@@ -114,6 +197,7 @@ static void live_commit(void)
         free(seg);
         return;
     }
+    fade_clear(); /* the plain tail is replaced: its ranges are gone */
     SendMessageW(hChat, WM_SETREDRAW, FALSE, 0);
     SendMessageW(hChat, EM_SETSEL, (WPARAM)g_live_off, (LPARAM)-1);
     SendMessageW(hChat, EM_REPLACESEL, FALSE, (LPARAM)L""); /* drop the plain tail */
@@ -152,6 +236,7 @@ static void flush_stream_n(size_t maxb)
         }
         else
         {
+            int fade = G.fade && emit && emit < 600; /* a big catch-up chunk just appears */
             if (genPhase == 1)
             {
                 re_nl();
@@ -160,7 +245,11 @@ static void flush_stream_n(size_t maxb)
             genPhase = 2;
             if (g_live_off < 0)
                 g_live_off = re_len();
-            re_add(g_pend.p, emit, cFg, 0, FACE);
+            re_track = 1;
+            re_add(g_pend.p, emit, fade ? cBg : cFg, 0, FACE);
+            re_track = 0;
+            if (fade)
+                fade_add(re_s, re_e);
             sb_add(&g_live, g_pend.p, emit);
             live_commit();
         }
@@ -202,6 +291,11 @@ static void flush_step(void)
     QueryPerformanceCounter(&b);
     ms = (double)(b.QuadPart - a.QuadPart) * 1000.0 / (double)f.QuadPart;
     g_flush_ms = g_flush_ms * 0.8 + ms * 0.2;
+    if (g_nfade && !g_fade_timer)
+    {
+        SetTimer(hMain, 3, iv > 33 ? iv : 33, NULL);
+        g_fade_timer = 1;
+    }
 #ifdef LLAMAC_PROFILE
     {
         wchar_t t[120];
