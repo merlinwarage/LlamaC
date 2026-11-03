@@ -131,17 +131,35 @@ static int ask_approval(const Tool *t, const char *args, int *always)
     *always = 0;
     sb_puts(&c, "Tool: ");
     sb_puts(&c, t->name);
-    sb_puts(&c, t->kind ? "   (MCP server)" : "   (file access)");
-    sb_puts(&c, "\n\nArguments:\n");
-    if (al > 1200)
+    if (t->kind)
+        sb_puts(&c, "   (MCP server)");
+    else if (!strcmp(t->rname, "run_command"))
+        sb_puts(&c, "   (RUNS A SHELL COMMAND AS YOU - not sandboxed)");
+    else
+        sb_puts(&c, "   (file access)");
+    if (!t->kind && !strcmp(t->rname, "run_command"))
     {
-        al = 1200;
-        while (al && ((unsigned char)args[al] & 0xC0) == 0x80)
-            al--;
+        J *aj = json_parse(args);
+        const char *cm = j_str(j_get(aj, "command")), *cw = j_str(j_get(aj, "cwd"));
+        sb_puts(&c, "\n\nCommand:\n");
+        sb_puts(&c, cm ? cm : "(missing)");
+        sb_puts(&c, "\n\nStarts in (relative to the file-tools root): ");
+        sb_puts(&c, cw && *cw ? cw : ".");
+        j_free(aj);
     }
-    sb_add(&c, args, al);
-    if (al < strlen(args))
-        sb_puts(&c, "\n...");
+    else
+    {
+        sb_puts(&c, "\n\nArguments:\n");
+        if (al > 1200)
+        {
+            al = 1200;
+            while (al && ((unsigned char)args[al] & 0xC0) == 0x80)
+                al--;
+        }
+        sb_add(&c, args, al);
+        if (al < strlen(args))
+            sb_puts(&c, "\n...");
+    }
     wchar_t *wc = w_from(sbs(&c));
     free(c.p);
     HMODULE cc = GetModuleHandleW(L"comctl32.dll");

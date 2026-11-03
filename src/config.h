@@ -13,6 +13,7 @@ typedef struct
     int tools_on, fswrite, autoappr, mem_on; /* enable tools, allow file writes, auto-approve every call */
     int ctx_limit;                           /* 0 = unknown/disabled */
     int autocompact;                         /* 1 = compress when free context is low */
+    int shell;                               /* 1 = offer the run_command tool (runs commands as the user) */
 } Cfg;
 /* kind: 0 text, 1 number override (empty = server default), 3 checkbox */
 typedef struct
@@ -40,6 +41,7 @@ static const Field FIELDS[] = {
     FLD("mem", "Long-term memory (saved facts)", 3, mem_on, NULL, NULL),
     FLD("fsroot", "File tools root folder", 0, fsroot, NULL, NULL),
     FLD("fswrite", "Allow file write / edit tools", 3, fswrite, NULL, NULL),
+    FLD("shell", "Allow shell command tool (NOT sandboxed)", 3, shell, NULL, NULL),
     FLD("autoappr", "Auto-approve ALL tool calls (unsafe)", 3, autoappr, NULL, NULL),
     FLD("toolmax", "Max tool rounds per message", 0, toolmax, NULL, NULL),
     FLD("temp", "Temperature", 1, temp, "temperature", "temperature"),

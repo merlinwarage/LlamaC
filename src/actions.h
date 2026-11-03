@@ -199,6 +199,7 @@ static void act_delconv(void)
             nconv--;
             break;
         }
+    conv_file_delete(cur);
     conv_free(cur);
     cur = NULL;
     if (!nconv)

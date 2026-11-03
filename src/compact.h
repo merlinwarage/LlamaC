@@ -13,23 +13,23 @@ typedef struct
 
 static void compact_clip(SB *o, const char *s, size_t cap)
 {
-    size_t n = strlen(s);
+    size_t n = strlen(s), h, t, ts;
     if (n <= cap)
     {
         sb_add(o, s, n);
         return;
     }
-    size_t h = cap * 2 / 3, t = cap - h;
+    h = cap * 2 / 3;
+    t = cap - h;
     while (h && ((unsigned char)s[h] & 0xC0) == 0x80)
         h--;
-    size_t ts = n - t;
+    ts = n - t;
     while (ts < n && ((unsigned char)s[ts] & 0xC0) == 0x80)
         ts++;
     sb_add(o, s, h);
     sb_puts(o, "\n[... clipped ...]\n");
     sb_add(o, s + ts, n - ts);
 }
-
 static void compact_transcript(SB *o, Conv *c, const int *ids, int k, size_t cap)
 {
     for (int i = 0; i < k; i++)
@@ -58,7 +58,6 @@ static void compact_transcript(SB *o, Conv *c, const int *ids, int k, size_t cap
             }
     }
 }
-
 /* one-shot non-streaming summary request; returns the summary text or NULL */
 static char *compact_summarize(const char *transcript)
 {
@@ -98,7 +97,6 @@ static char *compact_summarize(const char *transcript)
     j_free(r);
     return out;
 }
-
 static DWORD WINAPI compact_worker(LPVOID arg)
 {
     CJob *j = (CJob *)arg;
@@ -118,7 +116,6 @@ static DWORD WINAPI compact_worker(LPVOID arg)
     free(j);
     return 0;
 }
-
 static void compact_start(Conv *c)
 {
     CJob *j;

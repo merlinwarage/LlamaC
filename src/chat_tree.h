@@ -42,8 +42,11 @@ typedef struct
     long long mod;
     Node *n;
     int cnt, cap, root, leaf;
+    int dirty; /* needs to be written to its chat file */
 } Conv;
 
+static Conv *g_dig_conv; /* request.h: conversation the memory digest was snapshotted for */
+static Conv *g_rd_conv;  /* render.h: conversation currently shown in the chat view */
 static unsigned g_ctr;
 static void mkid(char *out) { snprintf(out, 40, "%llx-%x", (unsigned long long)time(NULL), ++g_ctr); }
 static void kid_add(Conv *c, int parent, int i)
@@ -93,13 +96,15 @@ static Conv *conv_new(void)
     c->mod = (long long)time(NULL) * 1000;
     c->root = node_add(c, -1, ROLE_ROOT);
     c->leaf = c->root;
+    c->dirty = 1;
     return c;
 }
-static Conv *g_dig_conv; /* defined/used in request.h */
 static void conv_free(Conv *c)
 {
     if (g_dig_conv == c)
         g_dig_conv = NULL;
+    if (g_rd_conv == c)
+        g_rd_conv = NULL;
     for (int i = 0; i < c->cnt; i++)
     {
         Node *n = &c->n[i];

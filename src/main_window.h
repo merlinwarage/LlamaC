@@ -568,6 +568,7 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l)
                             kn->parent = s;
                             kid_add(tc, s, keep);
                             tc->mod = now_ms();
+                            tc->dirty = 1;
                             if (cur == tc)
                                 render_all();
                             save_all();

@@ -186,28 +186,111 @@ static void render_tool_calls(const char *json)
     }
     j_free(a);
 }
+/* ---------- incremental chat view ----------
+   Only the last rendered message can change while a chat is open (it streams, then gets Markdown-rendered), so
+   render_all() keeps the offset of every rendered message and re-renders from the first message that differs. */
+typedef struct
+{
+    int id;         /* node index */
+    LONG off;       /* RichEdit character offset where this message starts */
+    int nb, nl, nt; /* code blocks / links / think blocks that existed before it */
+} RdNode;
+static RdNode *g_rd;
+static int g_rdn, g_rdcap, g_rd_key = -1;
+static LONG re_len(void)
+{
+    CHARRANGE cr;
+    SendMessageW(hChat, EM_SETSEL, (WPARAM)-1, (LPARAM)-1);
+    SendMessageW(hChat, EM_EXGETSEL, 0, (LPARAM)&cr);
+    return cr.cpMin;
+}
+static void blocks_trunc(int nb, int nl, int nt)
+{
+    for (int i = nb; i < nblk; i++)
+        free(blks[i].text);
+    if (nb < nblk)
+        nblk = nb;
+    if (nl < nlinks)
+        nlinks = nl;
+    if (nt < nthink)
+        nthink = nt;
+}
+static void render_node(const int *p, int i, int n)
+{
+    Node *m = &cur->n[p[i]];
+    char hdr[96];
+    Node *pn = &cur->n[m->parent];
+    int pos = 0;
+    for (int k = 0; k < pn->nk; k++)
+        if (pn->kids[k] == p[i])
+            pos = k;
+    snprintf(hdr, sizeof hdr, "\xE2\x97\x8F  %s", role_label(m->role));
+    if (pn->nk > 1)
+        snprintf(hdr + strlen(hdr), sizeof hdr - strlen(hdr), "     \xE2\x80\xB9 %d / %d \xE2\x80\xBA", pos + 1, pn->nk);
+    re_add(hdr, strlen(hdr), m->role == ROLE_USER ? cUser : m->role == ROLE_TOOL ? cDim : cAsst, CFE_BOLD, FACE);
+    re_nl();
+    for (int k = 0; k < m->na; k++)
+    {
+        char b[300];
+        snprintf(b, sizeof b, "\xE2\x96\xAB %s\n", m->att[k].name);
+        re_add(b, strlen(b), cDim, 0, FACE);
+    }
+    g_rnode = p[i];
+    if (G.thoughts)
+        render_think(m->reasoning, strlen(m->reasoning));
+    if (m->role == ROLE_TOOL)
+        render_tool_result(m);
+    else
+    {
+        render_content(m->content);
+        if (m->tcalls && *m->tcalls)
+            render_tool_calls(m->tcalls);
+    }
+    if (!(busy && cur == genConv && p[i] == genNode))
+    {
+        re_nl();
+        if (i + 1 < n)
+            re_rule(cBorder);
+    }
+}
 static void render_all(void)
 {
+    int *p = NULL, n = 0, start = 0;
+    int key = (G.dark ? 1 : 0) | (G.thoughts ? 2 : 0) | (g_colw << 2);
     g_pend.n = 0;
     if (g_pend.p)
         g_pend.p[0] = 0;
-    SendMessageW(hChat, WM_SETREDRAW, FALSE, 0);
-    SetWindowTextW(hChat, L"");
-    blocks_clear();
-    {
-        PARAFORMAT2 pf;
-        memset(&pf, 0, sizeof pf);
-        pf.cbSize = sizeof pf;
-        pf.dwMask = PFM_LINESPACING;
-        pf.bLineSpacingRule = 5;
-        pf.dyLineSpacing = 24;
-        SendMessageW(hChat, EM_SETPARAFORMAT, 0, (LPARAM)&pf);
-    }
     if (cur)
+        n = conv_path(cur, &p);
+    if (cur && cur == g_rd_conv && key == g_rd_key && n > 0 && g_rdn > 0)
     {
-        int *p;
-        int n = conv_path(cur, &p);
-        if (n == 0)
+        int d = 0;
+        while (d < n && d < g_rdn && g_rd[d].id == p[d])
+            d++;
+        start = d;
+        if (start > n - 1)
+            start = n - 1;
+        if (start > g_rdn - 1)
+            start = g_rdn - 1;
+        if (start < 0)
+            start = 0;
+    }
+    SendMessageW(hChat, WM_SETREDRAW, FALSE, 0);
+    if (start == 0)
+    {
+        SetWindowTextW(hChat, L"");
+        blocks_clear();
+        g_rdn = 0;
+        {
+            PARAFORMAT2 pf;
+            memset(&pf, 0, sizeof pf);
+            pf.cbSize = sizeof pf;
+            pf.dwMask = PFM_LINESPACING;
+            pf.bLineSpacingRule = 5;
+            pf.dyLineSpacing = 24;
+            SendMessageW(hChat, EM_SETPARAFORMAT, 0, (LPARAM)&pf);
+        }
+        if (cur && n == 0)
         {
             int sv = re_pt;
             re_pt = 20;
@@ -218,50 +301,33 @@ static void render_all(void)
             re_add("  Ask anything. Drop images or text files to attach them.\n", strlen("  Ask anything. Drop images or text files to attach them.\n"), cDim, 0, FACE);
             re_pt = sv;
         }
-        for (int i = 0; i < n; i++)
-        {
-            Node *m = &cur->n[p[i]];
-            char hdr[96];
-            Node *pn = &cur->n[m->parent];
-            int pos = 0;
-            for (int k = 0; k < pn->nk; k++)
-                if (pn->kids[k] == p[i])
-                    pos = k;
-            snprintf(hdr, sizeof hdr, "\xE2\x97\x8F  %s", role_label(m->role));
-            if (pn->nk > 1)
-                snprintf(hdr + strlen(hdr), sizeof hdr - strlen(hdr), "     \xE2\x80\xB9 %d / %d \xE2\x80\xBA", pos + 1, pn->nk);
-            re_add(hdr, strlen(hdr), m->role == ROLE_USER ? cUser : m->role == ROLE_TOOL ? cDim
-                                                                                         : cAsst,
-                   CFE_BOLD, FACE);
-            re_nl();
-            for (int k = 0; k < m->na; k++)
-            {
-                char b[300];
-                snprintf(b, sizeof b, "\xE2\x96\xAB %s\n", m->att[k].name);
-                re_add(b, strlen(b), cDim, 0, FACE);
-            }
-            g_rnode = p[i];
-            if (G.thoughts)
-                render_think(m->reasoning, strlen(m->reasoning));
-            if (m->role == ROLE_TOOL)
-                render_tool_result(m);
-            else
-            {
-                render_content(m->content);
-                if (m->tcalls && *m->tcalls)
-                    render_tool_calls(m->tcalls);
-            }
-            if (!(busy && cur == genConv && p[i] == genNode))
-            {
-                re_nl();
-                if (i + 1 < n)
-                {
-                    re_rule(cBorder);
-                }
-            }
-        }
-        free(p);
     }
+    else
+    {
+        const RdNode *rn = &g_rd[start];
+        SendMessageW(hChat, EM_SETSEL, (WPARAM)rn->off, (LPARAM)-1);
+        SendMessageW(hChat, EM_REPLACESEL, FALSE, (LPARAM)L"");
+        blocks_trunc(rn->nb, rn->nl, rn->nt);
+        g_rdn = start;
+    }
+    if (n > g_rdcap)
+    {
+        g_rdcap = n + 16;
+        g_rd = (RdNode *)realloc(g_rd, (size_t)g_rdcap * sizeof(RdNode));
+    }
+    for (int i = start; i < n; i++)
+    {
+        g_rd[i].id = p[i];
+        g_rd[i].off = re_len();
+        g_rd[i].nb = nblk;
+        g_rd[i].nl = nlinks;
+        g_rd[i].nt = nthink;
+        render_node(p, i, n);
+        g_rdn = i + 1;
+    }
+    g_rd_conv = cur;
+    g_rd_key = key;
+    free(p);
     SendMessageW(hChat, WM_SETREDRAW, TRUE, 0);
     SendMessageW(hChat, WM_VSCROLL, SB_BOTTOM, 0);
     InvalidateRect(hChat, NULL, TRUE);
