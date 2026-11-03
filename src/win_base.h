@@ -34,7 +34,7 @@
 #pragma comment(lib, "ole32.lib")
 #pragma comment(linker, "/SUBSYSTEM:WINDOWS")
 #pragma comment(linker, "\"/manifestdependency:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"")
-#pragma comment(linker, "/MANIFESTUAC:\"level='highestAvailable' uiAccess='false'\"")
+#pragma comment(linker, "/MANIFESTUAC:\"level='asInvoker' uiAccess='false'\"")
 
 #define BULLET "\xE2\x80\xA2"
 #define HBAR "\xE2\x94\x80"

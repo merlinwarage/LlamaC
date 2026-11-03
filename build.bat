@@ -1,5 +1,5 @@
 @echo off
-
-rem Run from "x64 Native Tools Command Prompt for VS 2022"
-icacls "." /setintegritylevel "(OI)(CI)M" /T /C
-cl /O2 /W3 /utf-8 llamac.c
+rem Build llamac - run from the "x64 Native Tools Command Prompt for VS 2022"
+cl /nologo /O2 /GL /Gy /GF /GS /W3 /utf-8 llamac.c /link /LTCG /OPT:REF /OPT:ICF /out:llamac.exe
+if errorlevel 1 exit /b 1
+echo Built llamac.exe

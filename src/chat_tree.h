@@ -95,8 +95,11 @@ static Conv *conv_new(void)
     c->leaf = c->root;
     return c;
 }
+static Conv *g_dig_conv; /* defined/used in request.h */
 static void conv_free(Conv *c)
 {
+    if (g_dig_conv == c)
+        g_dig_conv = NULL;
     for (int i = 0; i < c->cnt; i++)
     {
         Node *n = &c->n[i];

@@ -47,7 +47,7 @@ static wchar_t *auth_headers(const char *key, int json)
     free(h.p);
     return w;
 }
-static char *http_req(const wchar_t *method, const char *ep, const char *body)
+static char *http_req_t(const wchar_t *method, const char *ep, const char *body, DWORD recv_ms)
 {
     Url u;
     if (!url_parse(G.url, ep, &u))
@@ -62,7 +62,7 @@ static char *http_req(const wchar_t *method, const char *ep, const char *body)
         free(hd);
         return NULL;
     }
-    WinHttpSetTimeouts(ses, 1500, 1500, 5000, 15000);
+    WinHttpSetTimeouts(ses, 1500, 1500, 5000, (int)recv_ms);
     con = WinHttpConnect(ses, u.host, u.port, 0);
     if (con)
         req = WinHttpOpenRequest(con, method, u.path, NULL, NULL, NULL, u.secure ? WINHTTP_FLAG_SECURE : 0);
@@ -89,6 +89,10 @@ static char *http_req(const wchar_t *method, const char *ep, const char *body)
     if (!out.p)
         return xstrdup("");
     return out.p;
+}
+static char *http_req(const wchar_t *method, const char *ep, const char *body)
+{
+    return http_req_t(method, ep, body, 15000);
 }
 static void refresh_models(void)
 {

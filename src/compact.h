@@ -2,54 +2,87 @@
 #ifndef LLAMAC_COMPACT_H
 #define LLAMAC_COMPACT_H
 
-static int compact_tokens(Conv *c, int upto)
+/* The transcript is snapshotted on the UI thread (c->n may be realloc'ed by the UI while a
+   background thread runs), so the worker thread never touches the Conv. */
+typedef struct
 {
-    int n = 0;
-    for (int i = 0; i <= upto && i < c->cnt; i++)
+    Conv *c;
+    int keep; /* first node that stays; it is re-parented under the summary */
+    char *txt;
+} CJob;
+
+static void compact_clip(SB *o, const char *s, size_t cap)
+{
+    size_t n = strlen(s);
+    if (n <= cap)
     {
-        Node *m = &c->n[i];
-        n += (int)(strlen(m->content) / 4) + (int)(strlen(m->reasoning) / 4);
-        for (int k = 0; k < m->na; k++)
-            if (m->att[k].kind == ATT_TEXT)
-                n += (int)(strlen(m->att[k].data) / 4);
+        sb_add(o, s, n);
+        return;
     }
-    return n;
+    size_t h = cap * 2 / 3, t = cap - h;
+    while (h && ((unsigned char)s[h] & 0xC0) == 0x80)
+        h--;
+    size_t ts = n - t;
+    while (ts < n && ((unsigned char)s[ts] & 0xC0) == 0x80)
+        ts++;
+    sb_add(o, s, h);
+    sb_puts(o, "\n[... clipped ...]\n");
+    sb_add(o, s + ts, n - ts);
+}
+
+static void compact_transcript(SB *o, Conv *c, const int *ids, int k, size_t cap)
+{
+    for (int i = 0; i < k; i++)
+    {
+        Node *m = &c->n[ids[i]];
+        if (m->role == ROLE_ROOT)
+            continue;
+        sb_puts(o, m->role == ROLE_SYS ? "earlier summary" : role_name(m->role));
+        sb_puts(o, ": ");
+        compact_clip(o, m->content, cap);
+        sb_putc(o, '\n');
+        if (m->tcalls && *m->tcalls)
+        {
+            sb_puts(o, "[tool calls: ");
+            compact_clip(o, m->tcalls, 600);
+            sb_puts(o, "]\n");
+        }
+        for (int a = 0; a < m->na; a++)
+            if (m->att[a].kind == ATT_TEXT)
+            {
+                sb_puts(o, "[file ");
+                sb_puts(o, m->att[a].name);
+                sb_puts(o, "]\n");
+                compact_clip(o, m->att[a].data, cap);
+                sb_putc(o, '\n');
+            }
+    }
 }
 
 /* one-shot non-streaming summary request; returns the summary text or NULL */
-static char *compact_summarize(Conv *c, int from, int to)
+static char *compact_summarize(const char *transcript)
 {
-    SB body = {0}, txt = {0};
+    SB body = {0};
     char *raw, *out = NULL;
     J *r, *ch, *msg;
-    sb_puts(&body, "{\"messages\":[");
-    sb_puts(&body, "{\"role\":\"system\",\"content\":");
+    sb_puts(&body, "{\"messages\":[{\"role\":\"system\",\"content\":");
     sb_json(&body, "Summarize this conversation for continuity. Keep the user's goal, decisions, file paths, names, constraints, open questions and current state. Dense and factual, under 600 words. No commentary.");
-    sb_puts(&body, "},{\"role\":\"user\",\"content\":\"--- CONVERSATION ---\\n");
-    for (int i = from; i <= to && i < c->cnt; i++)
+    sb_puts(&body, "},{\"role\":\"user\",\"content\":");
     {
-        Node *m = &c->n[i];
-        if (m->role == ROLE_ROOT || m->role == ROLE_SYS)
-            continue;
-        sb_puts(&txt, role_name(m->role));
-        sb_puts(&txt, ": ");
-        sb_puts(&txt, m->content);
-        sb_putc(&txt, '\n');
-        for (int k = 0; k < m->na; k++)
-            if (m->att[k].kind == ATT_TEXT)
-            {
-                sb_puts(&txt, "[file ");
-                sb_puts(&txt, m->att[k].name);
-                sb_puts(&txt, "]\n");
-                sb_puts(&txt, m->att[k].data);
-                sb_putc(&txt, '\n');
-            }
+        SB u = {0};
+        sb_puts(&u, "--- CONVERSATION ---\n");
+        sb_puts(&u, transcript);
+        sb_json(&body, sbs(&u));
+        free(u.p);
     }
-    sb_json(&body, sbs(&txt));
-    sb_puts(&body, "\"}],\"stream\":false,\"max_tokens\":800,\"temperature\":0.2}");
-    free(txt.p);
-
-    raw = http_req(L"POST", "/v1/chat/completions", sbs(&body));
+    sb_puts(&body, "}],\"stream\":false,\"max_tokens\":800,\"temperature\":0.2");
+    if (G.model[0])
+    {
+        sb_puts(&body, ",\"model\":");
+        sb_json(&body, G.model);
+    }
+    sb_putc(&body, '}');
+    raw = http_req_t(L"POST", "/v1/chat/completions", sbs(&body), 300000); /* local models can be slow */
     free(body.p);
     if (!raw)
         return NULL;
@@ -66,27 +99,22 @@ static char *compact_summarize(Conv *c, int from, int to)
     return out;
 }
 
-typedef struct
-{
-    Conv *c;
-    int from, to;
-} CJob;
 static DWORD WINAPI compact_worker(LPVOID arg)
 {
     CJob *j = (CJob *)arg;
-    char *sum = compact_summarize(j->c, j->from, j->to);
+    char *sum = compact_summarize(j->txt);
     if (sum)
     {
         SB m = {0};
-        sb_printf(&m, "%d\n%d\n%s", j->from, j->to, sum);
+        sb_printf(&m, "%llu\n%d\n", (unsigned long long)(size_t)j->c, j->keep);
+        sb_puts(&m, sum);
         post_msg(10, sbs(&m));
         free(m.p);
         free(sum);
     }
     else
-    {
         post_msg(10, ""); /* empty = failed, just reset the flag */
-    }
+    free(j->txt);
     free(j);
     return 0;
 }
@@ -95,20 +123,40 @@ static void compact_start(Conv *c)
 {
     CJob *j;
     HANDLE h;
-    int *p, n, cut;
+    int *p, n, cut, k;
+    SB t = {0};
+    size_t limit;
     if (g_compacting || !G.autocompact || !g_nctx)
         return;
     n = conv_path(c, &p);
-    free(p);
     if (n < 8)
+    {
+        free(p);
         return;
+    }
+    /* cut on a user-message boundary so assistant tool_calls never get separated from their results */
     cut = n * 7 / 10;
-    if (cut < 4)
+    for (k = cut; k < n && c->n[p[k]].role != ROLE_USER; k++)
+        ;
+    if (k >= n || k < 4)
+    {
+        free(p);
         return;
+    }
+    /* keep the request well inside the server context (~3 chars per token, half the window) */
+    limit = (G.ctx_limit > 0 ? (size_t)G.ctx_limit : (size_t)g_nctx) * 3 / 2;
+    compact_transcript(&t, c, p, k, 6000);
+    if (t.n > limit)
+    {
+        free(t.p);
+        memset(&t, 0, sizeof t);
+        compact_transcript(&t, c, p, k, 800);
+    }
     j = (CJob *)calloc(1, sizeof *j);
     j->c = c;
-    j->from = 1;
-    j->to = cut;
+    j->keep = p[k];
+    j->txt = t.p ? t.p : xstrdup("");
+    free(p);
     g_compacting = 1;
     set_status("Context is low - compressing older messages ...");
     h = CreateThread(NULL, 0, compact_worker, j, 0, NULL);
@@ -117,6 +165,7 @@ static void compact_start(Conv *c)
     else
     {
         g_compacting = 0;
+        free(j->txt);
         free(j);
     }
 }

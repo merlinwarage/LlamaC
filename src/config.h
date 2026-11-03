@@ -73,7 +73,7 @@ static void cfg_defaults(Cfg *g)
     g->stats = 1;
     g->smartpaste = 1;
     g->tools_on = 1;
-    strcpy(g->toolmax, "10");
+    strcpy(g->toolmax, "25");
     g->mem_on = 1;
     g->ctx_limit = 0;
     g->autocompact = 1;

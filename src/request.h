@@ -52,13 +52,28 @@ static void put_msg_content(SB *s, Node *m)
 }
 static char *tools_schema_build(void); /* defined in tools.h: JSON array for the "tools" request field, or NULL */
 static char *mem_digest(void);         /* memory.h */
+/* The memory digest is snapshotted per conversation: a memory_save in the middle of a chat must not change
+   the system prompt, because that invalidates llama-server's KV prefix cache for the whole history. */
+static char *g_dig_txt;
+static int g_dig_on = -1;
+static char *digest_cached(Conv *c, const Cfg *g)
+{
+    if (c != g_dig_conv || c->cnt <= 3 || g_dig_on != g->mem_on)
+    {
+        free(g_dig_txt);
+        g_dig_txt = mem_digest();
+        g_dig_conv = c;
+        g_dig_on = g->mem_on;
+    }
+    return g_dig_txt ? xstrdup(g_dig_txt) : NULL;
+}
 static void build_messages(SB *s, Conv *c, const Cfg *g)
 {
     int first = 1;
     int *p;
     int n;
     int tools_left = 0;
-    char *md = mem_digest();
+    char *md = digest_cached(c, g);
     SB sy = {0};
     sb_puts(s, "\"messages\":[");
     sb_puts(&sy, g->sys);

@@ -539,48 +539,44 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l)
             }
             else if (g->kind == 10)
             {
-                if (genConv && g->text && *g->text)
+                int ok = 0;
+                if (g->text && *g->text)
                 {
-                    char *nl1 = strchr(g->text, '\n'), *nl2;
-                    int from = atoi(g->text), to = 0, s;
-                    if (nl1)
+                    char *nl1 = strchr(g->text, '\n'), *nl2 = nl1 ? strchr(nl1 + 1, '\n') : NULL;
+                    if (nl2)
                     {
-                        to = atoi(nl1 + 1);
-                        nl2 = strchr(nl1 + 1, '\n');
-                    }
-                    if (nl2 && to > from)
-                    {
-                        s = node_add(genConv, genConv->root, ROLE_SYS);
-                        setstr(genConv->n[s].content, nl2 + 1);
-                        /* re-parent every node after 'to' onto the summary */
-                        for (int i = to + 1; i < genConv->cnt; i++)
+                        Conv *tc = (Conv *)(size_t)strtoull(g->text, NULL, 10);
+                        int keep = atoi(nl1 + 1), alive = 0;
+                        for (int i = 0; i < nconv; i++)
+                            if (convs[i] == tc)
+                                alive = 1;
+                        if (alive && keep > 0 && keep < tc->cnt && tc->n[keep].parent >= 0)
                         {
-                            Node *m = &genConv->n[i];
-                            if (m->role == ROLE_ROOT || m->role == ROLE_SYS)
-                                continue;
-                            /* remove from old parent's kids, add to summary's kids */
-                            Node *op = &genConv->n[m->parent];
+                            int s = node_add(tc, tc->root, ROLE_SYS);
+                            Node *kn;
+                            Node *op;
+                            setstr(&tc->n[s].content, nl2 + 1);
+                            kn = &tc->n[keep];
+                            op = &tc->n[kn->parent];
                             for (int k = 0; k < op->nk; k++)
-                                if (op->kids[k] == i)
+                                if (op->kids[k] == keep)
                                 {
                                     memmove(op->kids + k, op->kids + k + 1, (size_t)(op->nk - k - 1) * sizeof(int));
                                     op->nk--;
                                     break;
                                 }
-                            m->parent = s;
-                            if (genConv->n[s].nk == genConv->n[s].capk)
-                            {
-                                genConv->n[s].capk = genConv->n[s].capk ? genConv->n[s].capk * 2 : 2;
-                                genConv->n[s].kids = (int *)realloc(genConv->n[s].kids, (size_t)genConv->n[s].capk * sizeof(int));
-                            }
-                            genConv->n[s].kids[genConv->n[s].nk++] = i;
+                            kn->parent = s;
+                            kid_add(tc, s, keep);
+                            tc->mod = now_ms();
+                            if (cur == tc)
+                                render_all();
+                            save_all();
+                            ok = 1;
                         }
-                        genConv->mod = now_ms();
-                        save_all();
                     }
                 }
                 g_compacting = 0;
-                set_status(g->text && *g->text ? "Context compressed." : "Context compression failed.");
+                set_status(ok ? "Context compressed." : "Context compression failed.");
                 free(g->text);
                 free(g);
                 return 0;
