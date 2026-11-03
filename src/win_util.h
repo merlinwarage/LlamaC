@@ -36,7 +36,9 @@ static void set_status(const char *s)
 static long long now_ms(void) { return (long long)time(NULL) * 1000; }
 static unsigned char *read_file(const wchar_t *path, size_t *len)
 {
-    HANDLE f = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+    HANDLE f = CreateFileW(path, GENERIC_READ,
+                           FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                           NULL, OPEN_EXISTING, 0, NULL);
     if (f == INVALID_HANDLE_VALUE)
         return NULL;
     LARGE_INTEGER sz;
