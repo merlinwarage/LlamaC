@@ -139,6 +139,7 @@ static void paint_main(HWND h)
         FillRect(dc, &r, lb);
         DeleteObject(lb);
     }
+    FillRect(dc, &rcTitle, hbrBg);
     if (cur)
     {
         wchar_t *w = w_from(cur->name);
@@ -406,6 +407,7 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l)
                     flush_stream();
                 g_pend_kind = g->kind;
                 sb_puts(&g_pend, g->text);
+                pace_arrival();
                 if (!g_timer_on)
                 {
                     SetTimer(h, 1, flush_interval(), NULL);
@@ -415,7 +417,8 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l)
         }
         else
         {
-            flush_stream();
+            if (g->kind != 2)
+                flush_stream(); /* stats arrive with every token; they must not force a flush */
             if (g->kind == 2)
             {
                 if (G.stats)
@@ -667,6 +670,7 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE hp, PWSTR cl, int show)
     ShowWindow(w, show);
     UpdateWindow(w);
     MSG msg;
+    timeBeginPeriod(1);
     while (GetMessageW(&msg, NULL, 0, 0) > 0)
     {
         if (!TranslateAcceleratorW(w, hAcc, &msg))
@@ -675,6 +679,7 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE hp, PWSTR cl, int show)
             DispatchMessageW(&msg);
         }
     }
+    timeEndPeriod(1);
     return (int)msg.wParam;
 }
 

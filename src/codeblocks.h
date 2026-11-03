@@ -2,6 +2,9 @@
 #ifndef LLAMAC_CODEBLOCKS_H
 #define LLAMAC_CODEBLOCKS_H
 
+#ifdef LLAMAC_PROFILE
+static double g_paint_ms;
+#endif
 static const char *ext_for(const char *lang)
 {
     static const struct
@@ -331,10 +334,26 @@ static int link_at(int x, int y)
     }
     return -1;
 }
+
 static LRESULT CALLBACK ChatSub(HWND h, UINT m, WPARAM w, LPARAM l, UINT_PTR id, DWORD_PTR ref)
 {
     (void)id;
     (void)ref;
+
+#ifdef LLAMAC_PROFILE
+    if (m == WM_PAINT)
+    {
+        LARGE_INTEGER f, a, b;
+        LRESULT r;
+        QueryPerformanceFrequency(&f);
+        QueryPerformanceCounter(&a);
+        r = DefSubclassProc(h, m, w, l);
+        QueryPerformanceCounter(&b);
+        g_paint_ms = (double)(b.QuadPart - a.QuadPart) * 1000.0 / (double)f.QuadPart;
+        return r;
+    }
+#endif
+
     if (m == WM_SETCURSOR)
     {
         POINT pt;

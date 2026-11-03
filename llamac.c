@@ -2,7 +2,7 @@
  * llamac.c - native Win32 / pure C client for llama-server (llama.cpp WebUI clone)
  * Build (x64 Native Tools Command Prompt for VS 2022):   build.bat   (or: cl /O2 /W3 /utf-8 llamac.c)
  */
-#define LLAMAC_VERSION L"1.6.2"
+#define LLAMAC_VERSION L"1.7.0"
 #define _CRT_SECURE_NO_WARNINGS
 #include <stdio.h>
 #include <stdlib.h>

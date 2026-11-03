@@ -134,7 +134,7 @@ static void fade_add(LONG a, LONG b)
 static int fade_tick(void)
 {
     DWORD now = GetTickCount();
-    int n = 0, changed = 0;
+    int n = 0;
     for (int i = 0; i < g_nfade; i++)
     {
         Fade f = g_fade[i];
@@ -143,11 +143,6 @@ static int fade_tick(void)
             step = FADE_STEPS;
         if (step != f.step)
         {
-            if (!changed)
-            {
-                SendMessageW(hChat, WM_SETREDRAW, FALSE, 0);
-                changed = 1;
-            }
             fade_apply(f.a, f.b, step >= FADE_STEPS ? cFg : fade_col(step));
             f.step = step;
         }
@@ -155,11 +150,6 @@ static int fade_tick(void)
             g_fade[n++] = f;
     }
     g_nfade = n;
-    if (changed)
-    {
-        SendMessageW(hChat, WM_SETREDRAW, TRUE, 0);
-        InvalidateRect(hChat, NULL, FALSE);
-    }
     return n > 0;
 }
 
@@ -275,21 +265,53 @@ static double g_flush_ms;
 static UINT flush_interval(void)
 {
     double t = g_flush_ms * 3;
-    return (UINT)(t < 16 ? 16 : t > 250 ? 250 : t);
+    return (UINT)(t < 16 ? 16 : t > 250 ? 250
+                                        : t);
+}
+static double g_rate, g_gap_ms = 300, g_last_arr, g_credit, g_prev_step;
+static double qpc_ms(void)
+{
+    LARGE_INTEGER f, c;
+    QueryPerformanceFrequency(&f);
+    QueryPerformanceCounter(&c);
+    return (double)c.QuadPart * 1000.0 / (double)f.QuadPart;
+}
+/* call whenever new text was added to g_pend: reveal the backlog over about one arrival gap */
+static void pace_arrival(void)
+{
+    double now = qpc_ms(), T;
+    if (g_last_arr > 0)
+    {
+        double gap = now - g_last_arr;
+        if (gap > 700)
+            gap = 700;
+        g_gap_ms = g_gap_ms * 0.7 + gap * 0.3;
+    }
+    g_last_arr = now;
+    T = g_gap_ms < 120 ? 120 : g_gap_ms > 700 ? 700
+                                              : g_gap_ms;
+    g_rate = (double)g_pend.n * 1000.0 / T; /* bytes per second, held until the next arrival */
 }
 static void flush_step(void)
 {
-    LARGE_INTEGER f, a, b;
     UINT iv = flush_interval();
-    size_t q = g_pend.n * iv / 100; /* drain the backlog in about 100 ms whatever the tick rate */
-    double ms;
-    if (q < 24)
-        q = 24;
-    QueryPerformanceFrequency(&f);
-    QueryPerformanceCounter(&a);
-    flush_stream_n(q);
-    QueryPerformanceCounter(&b);
-    ms = (double)(b.QuadPart - a.QuadPart) * 1000.0 / (double)f.QuadPart;
+    double t0 = qpc_ms(), dt = g_prev_step ? t0 - g_prev_step : (double)iv, ms;
+    size_t q;
+    g_prev_step = t0;
+    if (dt > 100)
+        dt = 100;
+    g_credit += g_rate * dt / 1000.0;
+    q = (size_t)g_credit;
+    if (q > g_pend.n)
+        q = g_pend.n;
+    if (g_pend.n > 4096 && q < g_pend.n / 4)
+        q = g_pend.n / 4; /* never fall far behind */
+    g_credit -= (double)q;
+    if (g_credit < 0 || q >= g_pend.n)
+        g_credit = 0;
+    if (q)
+        flush_stream_n(q);
+    ms = qpc_ms() - t0;
     g_flush_ms = g_flush_ms * 0.8 + ms * 0.2;
     if (g_nfade && !g_fade_timer)
     {
@@ -298,8 +320,9 @@ static void flush_step(void)
     }
 #ifdef LLAMAC_PROFILE
     {
-        wchar_t t[120];
-        _snwprintf(t, 120, L"flush %.1f ms (avg %.1f)  chat %d chars", ms, g_flush_ms, GetWindowTextLengthW(hChat));
+        wchar_t t[160];
+        _snwprintf(t, 160, L"tick dt %.0f ms | flush %.1f | paint %.1f | backlog %u B | rate %.0f B/s | gap %.0f ms",
+                   dt, ms, g_paint_ms, (unsigned)g_pend.n, g_rate, g_gap_ms);
         SetWindowTextW(hMain, t);
     }
 #endif
@@ -421,7 +444,9 @@ static void render_node(const int *p, int i, int n)
     snprintf(hdr, sizeof hdr, "\xE2\x97\x8F  %s", role_label(m->role));
     if (pn->nk > 1)
         snprintf(hdr + strlen(hdr), sizeof hdr - strlen(hdr), "     \xE2\x80\xB9 %d / %d \xE2\x80\xBA", pos + 1, pn->nk);
-    re_add(hdr, strlen(hdr), m->role == ROLE_USER ? cUser : m->role == ROLE_TOOL ? cDim : cAsst, CFE_BOLD, FACE);
+    re_add(hdr, strlen(hdr), m->role == ROLE_USER ? cUser : m->role == ROLE_TOOL ? cDim
+                                                                                 : cAsst,
+           CFE_BOLD, FACE);
     re_nl();
     for (int k = 0; k < m->na; k++)
     {
