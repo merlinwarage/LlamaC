@@ -69,7 +69,10 @@ enum
     IDC_TEMPLATE,
     IDC_RESET,
     IDC_MCPEDIT,
-    IDC_MCPRELOAD
+    IDC_MCPRELOAD,
+    IDC_SYSLIST,
+    IDC_SYSSAVE,
+    IDC_SYSDEL
 };
 #define WM_APP_MSG (WM_APP + 1)
 #define WM_APP_INIT (WM_APP + 2)

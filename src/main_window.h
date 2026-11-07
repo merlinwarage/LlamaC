@@ -462,9 +462,12 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l)
                         else
                             cont = 1;
                     }
-                    if (G.autocompact && G.ctx_limit > 0 &&
-                        g_last_prompt_n + g_last_pred_n > G.ctx_limit * 85 / 100)
+
+                    int lim = G.ctx_limit > 0 ? G.ctx_limit : g_nctx;
+                    if (G.autocompact && lim > 0 &&
+                        g_last_prompt_n + g_last_pred_n > lim * 85 / 100)
                         compact_start(genConv);
+
                     if (!cont && !n->content[0] && !n->reasoning[0])
                     {
                         Node *pn = &genConv->n[n->parent];

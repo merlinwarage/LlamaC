@@ -5,7 +5,7 @@
 /* ======================= settings ======================= */
 typedef struct
 {
-    char url[256], key[256], model[160], sys[2048], stop[256], custom[2048], kwargs[512], rfmt[24];
+    char url[256], key[256], model[160], sys[2048], sysname[80], stop[256], custom[2048], kwargs[512], rfmt[24];
     /* sampling overrides are strings: EMPTY = "not set -> use the llama-server value" */
     char temp[24], top_k[24], top_p[24], min_p[24], rep[24], pres[24], freq[24], dry[24], maxtok[24], seed[24];
     int dark, thoughts, stats, smartpaste;
@@ -30,6 +30,7 @@ static const Field FIELDS[] = {
     FLD("key", "API key", 0, key, NULL, NULL),
     FLD("model", NULL, 0, model, NULL, NULL),
     FLD("sys", "System prompt", 0, sys, NULL, NULL),
+    FLD("sysname", NULL, 0, sysname, NULL, NULL), /* name of the selected saved prompt */
     FLD("kwargs", "Jinja template kwargs (JSON)", 0, kwargs, NULL, NULL),
     FLD("rfmt", "Reasoning format (auto/none/deepseek)", 0, rfmt, NULL, NULL),
     FLD("stop", "Stop strings (separate with |)", 0, stop, NULL, NULL),
