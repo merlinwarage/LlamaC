@@ -10,8 +10,25 @@ static void set_busy(int b)
     InvalidateRect(B(IDC_SEND), NULL, FALSE);
 }
 static int g_toolround; /* tool rounds used for the current user message */
+/* A generation requested while compression runs waits for it, so the request is built from the
+   compressed conversation instead of the full one that is about to overflow. */
+static int g_wait_gen, g_wait_parent, g_wait_cont;
+static Conv *g_wait_conv;
 static void start_gen_ex(int parent, int cont)
 {
+    if (g_compacting)
+    {
+        g_wait_gen = 1;
+        g_wait_conv = cur;
+        g_wait_parent = parent;
+        g_wait_cont = cont;
+        cur->leaf = parent;
+        set_busy(1); /* Stop cancels the wait (do_send) */
+        render_all();
+        set_status("Waiting for context compression to finish...");
+        return;
+    }
+    g_last_prompt_n = g_last_pred_n = 0; /* only this generation's timings may trigger compression */
     if (!cont)
         g_toolround = 0;
     cur->leaf = parent;
@@ -40,6 +57,13 @@ static void do_send(void)
 {
     if (busy)
     {
+        if (g_wait_gen)
+        {
+            g_wait_gen = 0;
+            set_busy(0);
+            set_status("Cancelled (compression continues in the background)");
+            return;
+        }
         stop_gen();
         return;
     }

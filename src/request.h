@@ -72,7 +72,7 @@ static void build_messages(SB *s, Conv *c, const Cfg *g)
     int first = 1;
     int *p;
     int n;
-    int tools_left = 0;
+    int tools_left = 0, i0 = 0;
     char *md = digest_cached(c, g);
     SB sy = {0};
     sb_puts(s, "\"messages\":[");
@@ -84,6 +84,17 @@ static void build_messages(SB *s, Conv *c, const Cfg *g)
         sb_puts(&sy, md);
         free(md);
     }
+    n = conv_path(c, &p);
+    /* A compression summary is always the first node of the path (a child of root). It is merged into the
+       one system message: many chat templates reject a second system message or one that is not first. */
+    if (n > 0 && c->n[p[0]].role == ROLE_SYS)
+    {
+        if (sy.n)
+            sb_puts(&sy, "\n\n");
+        sb_puts(&sy, "Summary of the earlier part of this conversation (older messages were compressed):\n");
+        sb_puts(&sy, c->n[p[0]].content);
+        i0 = 1;
+    }
     if (sy.n)
     {
         sb_puts(s, "{\"role\":\"system\",\"content\":");
@@ -92,8 +103,21 @@ static void build_messages(SB *s, Conv *c, const Cfg *g)
         first = 0;
     }
     free(sy.p);
-    n = conv_path(c, &p);
-    for (int i = 0; i < n; i++)
+    if (i0)
+    { /* the kept part may start with an assistant turn (cut inside a tool loop); templates that require
+         user/assistant alternation need a user turn first */
+        int j = i0;
+        while (j < n && c->n[p[j]].role == ROLE_ASSIST && !c->n[p[j]].content[0] && !(c->n[p[j]].tcalls && *c->n[p[j]].tcalls))
+            j++;
+        if (j < n && c->n[p[j]].role != ROLE_USER)
+        {
+            if (!first)
+                sb_putc(s, ',');
+            first = 0;
+            sb_puts(s, "{\"role\":\"user\",\"content\":\"Continue from the summary above.\"}");
+        }
+    }
+    for (int i = i0; i < n; i++)
     {
         Node *m = &c->n[p[i]];
         int tc = 0;
@@ -124,16 +148,8 @@ static void build_messages(SB *s, Conv *c, const Cfg *g)
                 tools_left = need;
             }
         }
-        if (m->role == ROLE_SYS && m != &c->n[c->root])
-        { /* compression summary */
-            if (!first)
-                sb_putc(s, ',');
-            first = 0;
-            sb_puts(s, "{\"role\":\"system\",\"content\":");
-            sb_json(s, m->content);
-            sb_putc(s, '}');
+        if (m->role == ROLE_SYS) /* a summary is only valid as the first node, merged above */
             continue;
-        }
         if (m->role == ROLE_ASSIST && !m->content[0] && !tc)
             continue;
         if (!first)

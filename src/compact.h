@@ -11,6 +11,11 @@ typedef struct
     char *txt;
 } CJob;
 
+/* last attempt: after a failure the same conversation is not retried until its path grows by
+   CRETRY nodes, so a server that cannot summarize is not hit after every turn */
+#define CRETRY 6
+static Conv *g_clast_conv;
+static int g_clast_n, g_clast_fail;
 static void compact_clip(SB *o, const char *s, size_t cap)
 {
     size_t n = strlen(s), h, t, ts;
@@ -126,15 +131,20 @@ static void compact_start(Conv *c)
     if (g_compacting || !G.autocompact || !g_nctx)
         return;
     n = conv_path(c, &p);
-    if (n < 8)
+    if (n < 8 || (g_clast_fail && c == g_clast_conv && n < g_clast_n + CRETRY))
     {
         free(p);
         return;
     }
-    /* cut on a user-message boundary so assistant tool_calls never get separated from their results */
+    /* Cut before a user message so assistant tool_calls never get separated from their results.
+       A long agent run may have no user message after the cut point: then cut before an assistant
+       message instead - its tool results follow it, so the pairing still holds. */
     cut = n * 7 / 10;
     for (k = cut; k < n && c->n[p[k]].role != ROLE_USER; k++)
         ;
+    if (k >= n)
+        for (k = cut; k < n && c->n[p[k]].role != ROLE_ASSIST; k++)
+            ;
     if (k >= n || k < 4)
     {
         free(p);
@@ -149,6 +159,15 @@ static void compact_start(Conv *c)
         memset(&t, 0, sizeof t);
         compact_transcript(&t, c, p, k, 800);
     }
+    if (t.n > limit)
+    { /* many short messages: clip the whole transcript (keeps its start and its most recent part) */
+        SB t2 = {0};
+        compact_clip(&t2, t.p, limit);
+        free(t.p);
+        t = t2;
+    }
+    g_clast_conv = c;
+    g_clast_n = n;
     j = (CJob *)calloc(1, sizeof *j);
     j->c = c;
     j->keep = p[k];

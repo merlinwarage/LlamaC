@@ -464,7 +464,7 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l)
                     }
 
                     int lim = G.ctx_limit > 0 ? G.ctx_limit : g_nctx;
-                    if (G.autocompact && lim > 0 &&
+                    if (G.autocompact && lim > 0 && !g_stop &&
                         g_last_prompt_n + g_last_pred_n > lim * 85 / 100)
                         compact_start(genConv);
 
@@ -583,7 +583,24 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l)
                     }
                 }
                 g_compacting = 0;
-                set_status(ok ? "Context compressed." : "Context compression failed.");
+                g_clast_fail = !ok;
+                set_status(ok ? "Context compressed." : "Context compression failed (server error or timeout) - will retry after a few more messages.");
+                if (g_wait_gen)
+                { /* resume the generation that waited for the compression */
+                    int alive = 0;
+                    g_wait_gen = 0;
+                    for (int i = 0; i < nconv; i++)
+                        if (convs[i] == g_wait_conv)
+                            alive = 1;
+                    if (alive && g_wait_parent < g_wait_conv->cnt)
+                    {
+                        if (cur != g_wait_conv)
+                            select_conv(g_wait_conv);
+                        start_gen_ex(g_wait_parent, g_wait_cont);
+                    }
+                    else
+                        set_busy(0);
+                }
                 free(g->text);
                 free(g);
                 return 0;

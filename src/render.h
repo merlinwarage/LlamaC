@@ -23,16 +23,7 @@ static void render_think(const char *txt, size_t n)
     re_add(hdr, strlen(hdr), cDim, CFE_BOLD, FACE);
     re_track = 0;
     t->hs = re_s;
-    if (nlinks == caplinks)
-    {
-        caplinks = caplinks ? caplinks * 2 : 16;
-        links = (LinkR *)realloc(links, (size_t)caplinks * sizeof(LinkR));
-    }
-    links[nlinks].a = re_s;
-    links[nlinks].b = re_e;
-    links[nlinks].blk = id;
-    links[nlinks].act = 2;
-    nlinks++;
+    link_new(re_s, re_e, id, 2);
     re_nl();
     re_track = 1;
     re_add(txt, n, cDim, CFE_ITALIC, FACE);
@@ -427,6 +418,8 @@ static void blocks_trunc(int nb, int nl, int nt)
         free(blks[i].text);
     if (nb < nblk)
         nblk = nb;
+    for (int i = nl; i < nlinks; i++)
+        free(links[i].url);
     if (nl < nlinks)
         nlinks = nl;
     if (nt < nthink)
@@ -441,13 +434,20 @@ static void render_node(const int *p, int i, int n)
     for (int k = 0; k < pn->nk; k++)
         if (pn->kids[k] == p[i])
             pos = k;
-    snprintf(hdr, sizeof hdr, "\xE2\x97\x8F  %s", role_label(m->role));
+    int summ = (m->role == ROLE_SYS && i == 0); /* compression summary: always the first node */
+    snprintf(hdr, sizeof hdr, "\xE2\x97\x8F  %s", summ ? "Summary of earlier messages" : role_label(m->role));
     if (pn->nk > 1)
         snprintf(hdr + strlen(hdr), sizeof hdr - strlen(hdr), "     \xE2\x80\xB9 %d / %d \xE2\x80\xBA", pos + 1, pn->nk);
-    re_add(hdr, strlen(hdr), m->role == ROLE_USER ? cUser : m->role == ROLE_TOOL ? cDim
-                                                                                 : cAsst,
+    re_add(hdr, strlen(hdr), m->role == ROLE_USER ? cUser : m->role == ROLE_TOOL || summ ? cDim
+                                                                                         : cAsst,
            CFE_BOLD, FACE);
     re_nl();
+    if (summ)
+    {
+        const char *note = pn->nk > 1 ? "Older messages were compressed into this summary. Previous branch (\xE2\x80\xB9) shows the originals.\n"
+                                      : "Older messages were compressed into this summary.\n";
+        re_add(note, strlen(note), cDim, CFE_ITALIC, FACE);
+    }
     for (int k = 0; k < m->na; k++)
     {
         char b[300];

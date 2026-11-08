@@ -74,7 +74,8 @@ static int nblk, capblk;
 typedef struct
 {
     LONG a, b;
-    int blk, act;
+    int blk, act; /* act: 0 copy, 1 download, 2 think toggle, 3 open url */
+    char *url;    /* act 3 only */
 } LinkR;
 static LinkR *links;
 static int nlinks, caplinks;
@@ -91,8 +92,57 @@ static void blocks_clear(void)
     for (int i = 0; i < nblk; i++)
         free(blks[i].text);
     nblk = 0;
+    for (int i = 0; i < nlinks; i++)
+        free(links[i].url);
     nlinks = 0;
     nthink = 0;
+}
+static LinkR *link_new(LONG a, LONG b, int blk, int act)
+{
+    if (nlinks == caplinks)
+    {
+        caplinks = caplinks ? caplinks * 2 : 16;
+        links = (LinkR *)realloc(links, (size_t)caplinks * sizeof(LinkR));
+    }
+    LinkR *k = &links[nlinks++];
+    k->a = a;
+    k->b = b;
+    k->blk = blk;
+    k->act = act;
+    k->url = NULL;
+    return k;
+}
+/* current end of the RichEdit text (where the next re_add lands) */
+static LONG re_pos(void)
+{
+    CHARRANGE cr;
+    SendMessageW(hChat, EM_SETSEL, (WPARAM)-1, (LPARAM)-1);
+    SendMessageW(hChat, EM_EXGETSEL, 0, (LPARAM)&cr);
+    return cr.cpMin;
+}
+/* only web / mail links are opened; anything else (file paths, custom schemes) is ignored */
+static int url_ok(const char *u, size_t n)
+{
+    return (n > 7 && !_strnicmp(u, "http://", 7)) || (n > 8 && !_strnicmp(u, "https://", 8)) || (n > 7 && !_strnicmp(u, "mailto:", 7));
+}
+static void url_link(LONG a, LONG b, const char *u, size_t n)
+{
+    if (b <= a || !url_ok(u, n))
+        return;
+    LinkR *k = link_new(a, b, -1, 3);
+    k->url = (char *)malloc(n + 1);
+    memcpy(k->url, u, n);
+    k->url[n] = 0;
+}
+static void url_open(const char *u)
+{
+    int n = MultiByteToWideChar(CP_UTF8, 0, u, -1, NULL, 0);
+    if (n <= 0)
+        return;
+    wchar_t *w = (wchar_t *)malloc((size_t)n * sizeof(wchar_t));
+    MultiByteToWideChar(CP_UTF8, 0, u, -1, w, n);
+    ShellExecuteW(hMain, L"open", w, NULL, NULL, SW_SHOWNORMAL);
+    free(w);
 }
 static void re_link(const char *txt, int blk, int act)
 {
@@ -101,16 +151,7 @@ static void re_link(const char *txt, int blk, int act)
     re_add(txt, strlen(txt), cAccent, CFE_BOLD | CFE_UNDERLINE, MONO);
     re_bg = CLR_INVALID;
     re_track = 0;
-    if (nlinks == caplinks)
-    {
-        caplinks = caplinks ? caplinks * 2 : 16;
-        links = (LinkR *)realloc(links, (size_t)caplinks * sizeof(LinkR));
-    }
-    links[nlinks].a = re_s;
-    links[nlinks].b = re_e;
-    links[nlinks].blk = blk;
-    links[nlinks].act = act;
-    nlinks++;
+    link_new(re_s, re_e, blk, act);
 }
 static int code_cols(void)
 {
@@ -326,10 +367,19 @@ static int link_at(int x, int y)
             lo = mid + 1;
         else
         {
-            POINTL p1, p2;
+            /* EM_CHARFROMPOS snaps to the nearest char, so confirm the point really is on the link
+               (links may wrap over several lines) */
+            POINTL p1, p2, pc;
             SendMessageW(hChat, EM_POSFROMCHAR, (WPARAM)&p1, (LPARAM)links[mid].a);
             SendMessageW(hChat, EM_POSFROMCHAR, (WPARAM)&p2, (LPARAM)links[mid].b);
-            return (y >= p1.y && y < p1.y + 26 && x >= p1.x && x <= p2.x) ? mid : -1;
+            SendMessageW(hChat, EM_POSFROMCHAR, (WPARAM)&pc, (LPARAM)ch);
+            if (y < pc.y || y >= pc.y + 26)
+                return -1;
+            if (pc.y == p1.y && x < p1.x)
+                return -1;
+            if (pc.y == p2.y && x > p2.x)
+                return -1;
+            return mid;
         }
     }
     return -1;
@@ -375,6 +425,8 @@ static LRESULT CALLBACK ChatSub(HWND h, UINT m, WPARAM w, LPARAM l, UINT_PTR id,
                 blk_copy(links[k].blk);
             else if (links[k].act == 1)
                 blk_save(links[k].blk);
+            else if (links[k].act == 3)
+                url_open(links[k].url);
             else
                 think_toggle(links[k].blk);
         }

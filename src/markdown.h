@@ -4,6 +4,32 @@
 
 /* ---------- markdown-ish text formatting ---------- */
 static void md_inline(const char *s, size_t n, COLORREF col, DWORD base);
+static int md_in_link; /* no autolinks inside [text](url) - link ranges must not nest */
+/* length of a bare http(s):// URL starting at s, 0 if none */
+static size_t md_autolink(const char *s, size_t n)
+{
+    size_t p = (n > 8 && !_strnicmp(s, "https://", 8)) ? 8 : (n > 7 && !_strnicmp(s, "http://", 7)) ? 7 : 0;
+    if (!p)
+        return 0;
+    size_t j = p;
+    int par = 0;
+    while (j < n && !isspace((unsigned char)s[j]) && !strchr("<>\"`", s[j]))
+    {
+        if (s[j] == '(')
+            par++;
+        else if (s[j] == ')')
+            par--;
+        j++;
+    }
+    /* trailing punctuation belongs to the sentence, an unbalanced ')' to the surrounding text */
+    while (j > p && (strchr(".,;:!?'*_", s[j - 1]) || (s[j - 1] == ')' && par < 0)))
+    {
+        if (s[j - 1] == ')')
+            par++;
+        j--;
+    }
+    return j > p ? j : 0;
+}
 static void md_span(const char *s, size_t n, COLORREF col, DWORD eff) { md_inline(s, n, col, eff); }
 static void md_inline(const char *s, size_t n, COLORREF col, DWORD base)
 {
@@ -12,6 +38,17 @@ static void md_inline(const char *s, size_t n, COLORREF col, DWORD base)
     while (i < n)
     {
         char c = s[i];
+        size_t ul;
+        if (!md_in_link && (c == 'h' || c == 'H') && (i == 0 || !isalnum((unsigned char)s[i - 1])) && (ul = md_autolink(s + i, n - i)) > 0)
+        {
+            FLUSH();
+            LONG a = re_pos();
+            re_add(s + i, ul, cAccent, base | CFE_UNDERLINE, FACE);
+            url_link(a, re_pos(), s + i, ul);
+            i += ul;
+            st = i;
+            continue;
+        }
         if (c == '`')
         {
             size_t j = i + 1;
@@ -81,10 +118,15 @@ static void md_inline(const char *s, size_t n, COLORREF col, DWORD base)
                 if (k < n)
                 {
                     FLUSH();
+                    LONG a = re_pos();
+                    md_in_link++;
                     md_span(s + i + 1, j - i - 1, cAccent, base | CFE_UNDERLINE);
+                    md_in_link--;
                     re_add(" (", 2, cDim, 0, FACE);
                     re_add(s + j + 2, k - j - 2, cDim, 0, FACE);
                     re_add(")", 1, cDim, 0, FACE);
+                    if (!md_in_link)
+                        url_link(a, re_pos(), s + j + 2, k - j - 2);
                     i = k + 1;
                     st = i;
                     continue;
