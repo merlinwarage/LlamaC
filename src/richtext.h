@@ -7,6 +7,16 @@ static COLORREF re_bg = CLR_INVALID;
 static int re_pt = PT;
 static int re_track;
 static LONG re_s, re_e;
+/* chars the text font usually lacks (emoji, symbols, CJK): RichEdit substitutes a fallback font for them,
+   and keeps using a different font for the rest of the same insertion (seen with Consolas: the text after an
+   emoji came out in Segoe UI). Such runs are inserted separately so the following run gets its own font back. */
+static int re_special(const wchar_t *w, int i)
+{
+    wchar_t c = w[i];
+    return (c >= 0xD800 && c <= 0xDFFF) || (c >= 0x2600 && c <= 0x27BF) || (c >= 0x2B00 && c <= 0x2BFF) ||
+           (c >= 0x2E80 && c <= 0xD7FF) || (c >= 0xF900 && c <= 0xFAFF) || (c >= 0xFE00 && c <= 0xFE0F) ||
+           c == 0x200D || c == 0x20E3;
+}
 static void re_add(const char *s, size_t len, COLORREF col, DWORD eff, const wchar_t *face)
 {
     if (!len)
@@ -41,8 +51,20 @@ static void re_add(const char *s, size_t len, COLORREF col, DWORD eff, const wch
         SendMessageW(hChat, EM_EXGETSEL, 0, (LPARAM)&cr);
         re_s = cr.cpMin;
     }
-    SendMessageW(hChat, EM_SETCHARFORMAT, SCF_SELECTION, (LPARAM)&cf);
-    SendMessageW(hChat, EM_REPLACESEL, FALSE, (LPARAM)w);
+    for (int a = 0; a < k;)
+    { /* runs of ordinary / special chars, each inserted with the format set again */
+        int b = a, sp = re_special(w, a);
+        while (b < k && re_special(w, b) == sp)
+            b++;
+        wchar_t keep = w[b];
+        w[b] = 0;
+        if (a > 0)
+            SendMessageW(hChat, EM_SETSEL, (WPARAM)-1, (LPARAM)-1);
+        SendMessageW(hChat, EM_SETCHARFORMAT, SCF_SELECTION, (LPARAM)&cf);
+        SendMessageW(hChat, EM_REPLACESEL, FALSE, (LPARAM)(w + a));
+        w[b] = keep;
+        a = b;
+    }
     if (re_track)
     {
         CHARRANGE cr;

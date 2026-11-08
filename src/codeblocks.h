@@ -176,56 +176,75 @@ static int code_cols(void)
     ReleaseDC(hChat, dc);
     return cols_c;
 }
+/* display width of the UTF-8 char at s in a monospace font: 0 (combining / joiner / variation selector),
+   2 (CJK, fullwidth, emoji - drawn by a fallback font about two cells wide) or 1; *len = its byte length */
+static int u8_cw(const unsigned char *s, size_t n, size_t *len)
+{
+    unsigned cp = s[0];
+    size_t l = cp < 0x80 ? 1 : cp >= 0xF0 ? 4 : cp >= 0xE0 ? 3 : cp >= 0xC0 ? 2 : 1;
+    if (l > n)
+        l = 1;
+    if (l > 1)
+    {
+        cp &= 0x3F >> (l - 1);
+        for (size_t k = 1; k < l; k++)
+            cp = (cp << 6) | (s[k] & 0x3F);
+    }
+    *len = l;
+    if ((cp >= 0x300 && cp <= 0x36F) || cp == 0x200B || cp == 0x200D || (cp >= 0xFE00 && cp <= 0xFE0F))
+        return 0;
+    if ((cp >= 0x1100 && cp <= 0x115F) || (cp >= 0x2600 && cp <= 0x27BF) || (cp >= 0x2E80 && cp <= 0xA4CF) ||
+        (cp >= 0xAC00 && cp <= 0xD7A3) || (cp >= 0xF900 && cp <= 0xFAFF) || (cp >= 0xFE30 && cp <= 0xFE4F) ||
+        (cp >= 0xFF00 && cp <= 0xFF60) || (cp >= 0xFFE0 && cp <= 0xFFE6) || (cp >= 0x1F300 && cp <= 0x1FAFF) || cp >= 0x20000)
+        return 2;
+    return 1;
+}
+/* Pads every line to the visible width so the block background is a clean rectangle. Lines longer than
+   that are wrapped here: left to RichEdit, a line padded past the edge wraps its padding onto a ragged
+   extra row. Copy / Download use the original text, so the wrapping is display-only. */
 static char *pad_code(const char *s, size_t n, size_t *outn, size_t *outw)
 {
-    size_t w = (size_t)code_cols(), c = 0, col = 0;
-    for (size_t i = 0; i <= n; i++)
-    {
-        if (i == n || s[i] == '\n')
-        {
-            if (c > w)
-                w = c;
-            c = 0;
-        }
-        else if (s[i] == '\r')
-        {
-        }
-        else if (s[i] == '\t')
-            c += 4;
-        else if (((unsigned char)s[i] & 0xC0) != 0x80)
-            c++;
-    }
+    size_t w = (size_t)code_cols(), col = 0;
     SB o = {0};
+#define PAD_EOL()                  \
+    do                             \
+    {                              \
+        for (; col < w; col++)     \
+            sb_putc(&o, ' ');      \
+        sb_putc(&o, ' ');          \
+        col = 0;                   \
+    } while (0)
     sb_putc(&o, ' ');
-    for (size_t i = 0; i <= n; i++)
+    for (size_t i = 0; i < n;)
     {
-        if (i == n || s[i] == '\n')
+        if (s[i] == '\n')
         {
-            for (; col < w; col++)
-                sb_putc(&o, ' ');
-            sb_putc(&o, ' ');
-            if (i < n)
-            {
-                sb_putc(&o, '\n');
-                sb_putc(&o, ' ');
-            }
-            col = 0;
+            PAD_EOL();
+            sb_puts(&o, "\n ");
+            i++;
+            continue;
         }
-        else if (s[i] == '\r')
+        if (s[i] == '\r')
         {
+            i++;
+            continue;
         }
-        else if (s[i] == '\t')
-        {
+        size_t len = 1;
+        int cw = s[i] == '\t' ? 4 : u8_cw((const unsigned char *)s + i, n - i, &len);
+        if (col + cw > w && col > 0)
+        { /* wrap: the continuation row is padded like any other */
+            PAD_EOL();
+            sb_puts(&o, "\n ");
+        }
+        if (s[i] == '\t')
             sb_puts(&o, "    ");
-            col += 4;
-        }
         else
-        {
-            sb_putc(&o, s[i]);
-            if (((unsigned char)s[i] & 0xC0) != 0x80)
-                col++;
-        }
+            sb_add(&o, s + i, len);
+        col += cw;
+        i += len;
     }
+    PAD_EOL();
+#undef PAD_EOL
     *outn = o.n;
     *outw = w;
     return o.p;
