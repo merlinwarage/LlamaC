@@ -465,7 +465,7 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l)
 
                     int lim = G.ctx_limit > 0 ? G.ctx_limit : g_nctx;
                     if (G.autocompact && lim > 0 && !g_stop &&
-                        g_last_prompt_n + g_last_pred_n > lim * 85 / 100)
+                        g_last_prompt_n + g_last_pred_n > ctx_trigger(lim))
                         compact_start(genConv);
 
                     if (!cont && !n->content[0] && !n->reasoning[0])
@@ -546,7 +546,8 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l)
             else if (g->kind == 10)
             {
                 int ok = 0;
-                if (g->text && *g->text)
+                const char *why = g->text && g->text[0] == '!' ? g->text + 1 : "the conversation changed while summarizing";
+                if (g->text && *g->text && g->text[0] != '!')
                 {
                     char *nl1 = strchr(g->text, '\n'), *nl2 = nl1 ? strchr(nl1 + 1, '\n') : NULL;
                     if (nl2)
@@ -584,7 +585,16 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l)
                 }
                 g_compacting = 0;
                 g_clast_fail = !ok;
-                set_status(ok ? "Context compressed." : "Context compression failed (server error or timeout) - will retry after a few more messages.");
+                if (ok)
+                    g_meas_conv = NULL; /* the prompt shrank: the old measurement no longer applies */
+                if (ok)
+                    set_status("Context compressed.");
+                else
+                {
+                    char sb2[520];
+                    snprintf(sb2, sizeof sb2, "Context compression failed: %.420s - will retry after a few more messages.", why);
+                    set_status(sb2);
+                }
                 if (g_wait_gen)
                 { /* resume the generation that waited for the compression */
                     int alive = 0;

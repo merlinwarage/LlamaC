@@ -63,8 +63,8 @@ static void compact_transcript(SB *o, Conv *c, const int *ids, int k, size_t cap
             }
     }
 }
-/* one-shot non-streaming summary request; returns the summary text or NULL */
-static char *compact_summarize(const char *transcript)
+/* one-shot non-streaming summary request; returns the summary text, or NULL with the reason in err */
+static char *compact_summarize(const char *transcript, char *err, size_t es)
 {
     SB body = {0};
     char *raw, *out = NULL;
@@ -79,14 +79,24 @@ static char *compact_summarize(const char *transcript)
         sb_json(&body, sbs(&u));
         free(u.p);
     }
-    sb_puts(&body, "}],\"stream\":false,\"max_tokens\":800,\"temperature\":0.2");
+    /* Reasoning models think before the summary: measured ~2100 reasoning + ~700 summary tokens for an
+       8k-token transcript (Qwen3 27B), so the budget must cover both. Thinking is not forced off: some
+       models answer enable_thinking:false with an empty reply. The user's template kwargs apply instead. */
+    sb_puts(&body, "}],\"stream\":false,\"max_tokens\":6144,\"temperature\":0.2");
+    if (G.kwargs[0])
+    {
+        J *k = json_parse_strict(G.kwargs);
+        if (k && k->t == J_OBJ)
+            sb_printf(&body, ",\"chat_template_kwargs\":%s", G.kwargs);
+        j_free(k);
+    }
     if (G.model[0])
     {
         sb_puts(&body, ",\"model\":");
         sb_json(&body, G.model);
     }
     sb_putc(&body, '}');
-    raw = http_req_t(L"POST", "/v1/chat/completions", sbs(&body), 300000); /* local models can be slow */
+    raw = http_req_x(L"POST", "/v1/chat/completions", sbs(&body), 900000, err, es); /* local models can be slow: 6k tokens at ~18 t/s is ~6 min */
     free(body.p);
     if (!raw)
         return NULL;
@@ -96,8 +106,24 @@ static char *compact_summarize(const char *transcript)
     msg = j_get(j_idx(ch, 0), "message");
     {
         const char *s = j_str(j_get(msg, "content"));
+        const char *fr = j_str(j_get(j_idx(ch, 0), "finish_reason"));
+        const char *rc = j_str(j_get(msg, "reasoning_content"));
+        if (s)
+        { /* reasoning_format "none": the thinking arrives inline */
+            const char *e = strstr(s, "</think>");
+            if (e)
+                s = e + 8;
+            while (*s && isspace((unsigned char)*s))
+                s++;
+        }
         if (s && *s)
             out = xstrdup(s);
+        else if (!r || !msg)
+            snprintf(err, es, "unexpected reply from the server");
+        else if (rc && *rc)
+            snprintf(err, es, "the model used its whole token budget on reasoning (finish_reason %s)", fr ? fr : "?");
+        else
+            snprintf(err, es, "the model returned an empty summary (finish_reason %s)", fr ? fr : "?");
     }
     j_free(r);
     return out;
@@ -105,7 +131,8 @@ static char *compact_summarize(const char *transcript)
 static DWORD WINAPI compact_worker(LPVOID arg)
 {
     CJob *j = (CJob *)arg;
-    char *sum = compact_summarize(j->txt);
+    char err[400] = "";
+    char *sum = compact_summarize(j->txt, err, sizeof err);
     if (sum)
     {
         SB m = {0};
@@ -116,7 +143,11 @@ static DWORD WINAPI compact_worker(LPVOID arg)
         free(sum);
     }
     else
-        post_msg(10, ""); /* empty = failed, just reset the flag */
+    { /* "!reason" = failed */
+        char m[420];
+        snprintf(m, sizeof m, "!%s", err[0] ? err : "unknown error");
+        post_msg(10, m);
+    }
     free(j->txt);
     free(j);
     return 0;
@@ -174,7 +205,7 @@ static void compact_start(Conv *c)
     j->txt = t.p ? t.p : xstrdup("");
     free(p);
     g_compacting = 1;
-    set_status("Context is low - compressing older messages ...");
+    set_status("Context is low - compressing older messages (can take a few minutes with reasoning models) ...");
     h = CreateThread(NULL, 0, compact_worker, j, 0, NULL);
     if (h)
         CloseHandle(h);

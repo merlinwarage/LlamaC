@@ -14,8 +14,65 @@ static int g_toolround; /* tool rounds used for the current user message */
    compressed conversation instead of the full one that is about to overflow. */
 static int g_wait_gen, g_wait_parent, g_wait_cont;
 static Conv *g_wait_conv;
+static void compact_start(Conv *c); /* compact.h */
+/* The last measured generation: its timings (g_last_prompt_n + g_last_pred_n) cover the path up to and
+   including g_meas_node. Invalidated after a compression, which changes the prompt. */
+static Conv *g_meas_conv;
+static int g_meas_node = -1;
+/* compress once the prompt passes this. Auto leaves room for the reply (reasoning models need thousands
+   of tokens): max(15%, 4096 tokens), at most half the context. */
+static int ctx_trigger(int lim)
+{
+    int pct = G.compact_pct;
+    if (pct > 0)
+    {
+        if (pct < 30)
+            pct = 30;
+        if (pct > 95)
+            pct = 95;
+        return (int)((long long)lim * pct / 100);
+    }
+    int r = lim * 15 / 100;
+    if (r < 4096)
+        r = 4096;
+    if (r > lim / 2)
+        r = lim / 2;
+    return lim - r;
+}
+/* tokens the next request will use: measured part + ~3 chars/token for what was added since
+   (tool results, a new user message). -1 = no usable measurement for this path. */
+static int est_tokens(Conv *c)
+{
+    int *p, n, at = -1;
+    size_t ch = 0;
+    if (c != g_meas_conv || g_meas_node < 0 || g_last_prompt_n <= 0)
+        return -1;
+    n = conv_path(c, &p);
+    for (int i = 0; i < n; i++)
+        if (p[i] == g_meas_node)
+            at = i;
+    for (int i = at < 0 ? n : at + 1; i < n; i++)
+    {
+        Node *m = &c->n[p[i]];
+        ch += strlen(m->content);
+        if (m->tcalls)
+            ch += strlen(m->tcalls);
+        for (int a = 0; a < m->na; a++)
+            ch += m->att[a].kind == ATT_TEXT ? strlen(m->att[a].data) : 3000; /* image/audio: rough */
+    }
+    free(p);
+    return at < 0 ? -1 : g_last_prompt_n + g_last_pred_n + (int)(ch / 3);
+}
 static void start_gen_ex(int parent, int cont)
 {
+    cur->leaf = parent;
+    if (!g_compacting && G.autocompact)
+    { /* a big tool result or attachment can push the next prompt over the limit before any
+         generation reports its usage, so check the estimate before sending */
+        int lim = G.ctx_limit > 0 ? G.ctx_limit : g_nctx, est = est_tokens(cur);
+        if (lim > 0 && est > ctx_trigger(lim))
+            compact_start(cur); /* sets g_compacting when it starts; the wait below then applies */
+    }
     if (g_compacting)
     {
         g_wait_gen = 1;
@@ -31,8 +88,9 @@ static void start_gen_ex(int parent, int cont)
     g_last_prompt_n = g_last_pred_n = 0; /* only this generation's timings may trigger compression */
     if (!cont)
         g_toolround = 0;
-    cur->leaf = parent;
     int a = node_add(cur, parent, ROLE_ASSIST);
+    g_meas_conv = cur;
+    g_meas_node = a;
     cur->leaf = a;
     Job *j = (Job *)calloc(1, sizeof *j);
     j->body = build_request(cur, &G);

@@ -47,11 +47,18 @@ static wchar_t *auth_headers(const char *key, int json)
     free(h.p);
     return w;
 }
-static char *http_req_t(const wchar_t *method, const char *ep, const char *body, DWORD recv_ms)
+/* err (optional) receives why the request failed: connect error, timeout, or HTTP status + server message */
+static char *http_req_x(const wchar_t *method, const char *ep, const char *body, DWORD recv_ms, char *err, size_t es)
 {
     Url u;
+    if (err && es)
+        err[0] = 0;
     if (!url_parse(G.url, ep, &u))
+    {
+        if (err)
+            snprintf(err, es, "invalid server URL");
         return NULL;
+    }
     HINTERNET ses = WinHttpOpen(L"llamac/1.0", WINHTTP_ACCESS_TYPE_NO_PROXY, NULL, NULL, 0), con = NULL, req = NULL;
     SB out = {0};
     int ok = 0;
@@ -74,6 +81,25 @@ static char *http_req_t(const wchar_t *method, const char *ep, const char *body,
         while (WinHttpReadData(req, tmp, sizeof tmp, &got) && got)
             sb_add(&out, tmp, got);
         ok = (st == 200);
+        if (!ok && err)
+        { /* llama-server / OpenAI style: {"error":{"message":"..."}} */
+            J *r = out.p ? json_parse(out.p) : NULL;
+            const char *m = j_str(j_get(j_get(r, "error"), "message"));
+            snprintf(err, es, "HTTP %lu: %.300s", (unsigned long)st, m ? m : out.p ? out.p : "");
+            j_free(r);
+        }
+    }
+    else if (err)
+    {
+        DWORD e = GetLastError();
+        if (!con || !req)
+            snprintf(err, es, "cannot connect to %s", G.url);
+        else if (e == ERROR_WINHTTP_TIMEOUT)
+            snprintf(err, es, "no reply within %lu s (timeout)", (unsigned long)(recv_ms / 1000));
+        else if (e == ERROR_WINHTTP_CANNOT_CONNECT)
+            snprintf(err, es, "cannot connect to %s (server not running?)", G.url);
+        else
+            snprintf(err, es, "network error %lu", (unsigned long)e);
     }
     if (req)
         WinHttpCloseHandle(req);
@@ -89,6 +115,10 @@ static char *http_req_t(const wchar_t *method, const char *ep, const char *body,
     if (!out.p)
         return xstrdup("");
     return out.p;
+}
+static char *http_req_t(const wchar_t *method, const char *ep, const char *body, DWORD recv_ms)
+{
+    return http_req_x(method, ep, body, recv_ms, NULL, 0);
 }
 static char *http_req(const wchar_t *method, const char *ep, const char *body)
 {

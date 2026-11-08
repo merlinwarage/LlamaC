@@ -13,10 +13,11 @@ typedef struct
     int tools_on, fswrite, autoappr, mem_on; /* enable tools, allow file writes, auto-approve every call */
     int ctx_limit;                           /* 0 = unknown/disabled */
     int autocompact;                         /* 1 = compress when free context is low */
+    int compact_pct;                         /* compress at this % of the context, 0 = auto */
     int shell;                               /* 1 = offer the run_command tool (runs commands as the user) */
     int fade;                                /* 1 = fade-in animation for streamed text */
 } Cfg;
-/* kind: 0 text, 1 number override (empty = server default), 3 checkbox */
+/* kind: 0 text, 1 number override (string, empty = server default), 2 integer, 3 checkbox */
 typedef struct
 {
     const char *key, *label;
@@ -57,8 +58,9 @@ static const Field FIELDS[] = {
     FLD("dry", "DRY multiplier", 1, dry, "dry_multiplier", "dry_multiplier"),
     FLD("maxtok", "Max tokens", 1, maxtok, "max_tokens", "n_predict"),
     FLD("seed", "Seed", 1, seed, "seed", "seed"),
-    FLD("ctxlimit", "Context limit (tokens, 0 = off)", 1, ctx_limit, NULL, NULL),
+    FLD("ctxlimit", "Context limit (tokens, 0 = server)", 2, ctx_limit, NULL, NULL), /* int: kind 1 would write text into it */
     FLD("autocompact", "Auto-compress when context is low", 3, autocompact, NULL, NULL),
+    FLD("compactpct", "Compress at % of context (0 = auto)", 2, compact_pct, NULL, NULL),
 };
 #define NFIELDS ((int)(sizeof FIELDS / sizeof FIELDS[0]))
 static int fidx(const char *key)
@@ -176,6 +178,11 @@ static void cfg_parse(Cfg *g, char *txt)
             if (!strcmp(FIELDS[i].key, ln))
                 field_set(g, &FIELDS[i], eq + 1);
     }
+    /* older versions stored ctxlimit as clipped text (e.g. "200" for 20000): no real context is that small */
+    if (g->ctx_limit < 1024)
+        g->ctx_limit = 0;
+    if (g->compact_pct < 0)
+        g->compact_pct = 0;
 }
 
 #endif /* LLAMAC_CONFIG_H */
