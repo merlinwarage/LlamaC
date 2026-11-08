@@ -2,7 +2,7 @@
 
 **A native Win32 client for [llama-server](https://github.com/ggml-org/llama.cpp) written in pure C.** A single small `.exe`, no runtime, no Electron, no browser. It aims to feel like the llama.cpp WebUI. `Only 4MB of memory usage`.
 
-![language](https://img.shields.io/badge/language-C-blue) ![platform](https://img.shields.io/badge/platform-Windows%2010%2F11-0078D6) ![deps](https://img.shields.io/badge/dependencies-none-brightgreen) ![version](https://img.shields.io/badge/version-1.2.0-lightgrey)
+![language](https://img.shields.io/badge/language-C-blue) ![platform](https://img.shields.io/badge/platform-Windows%2010%2F11-0078D6) ![deps](https://img.shields.io/badge/dependencies-none-brightgreen) ![version](https://img.shields.io/badge/version-2.0.0-lightgrey)
 
 <img src="docs/main.png" alt="Console" width="49%"> <img src="docs/settings.png" alt="Config" width="49%">
 
@@ -13,7 +13,9 @@
 - **Long-term memory.** Facts the model saves are stored locally and injected into every chat. See [Memory](#long-term-memory).
 - **Branching conversations.** Regenerate or edit a message and flip between alternatives (`‹ 1 / 2 ›`).
 - **Reasoning support.** Collapsible "Thinking" blocks for `reasoning_content` and inline `<think>` tags.
-- **Rich rendering** in a native RichEdit control: Markdown (headings, lists, quotes, tables, links, inline code), syntax-highlighted code blocks with **Copy** and **Download** buttons.
+- **Rich rendering** in a native RichEdit control: Markdown (headings, lists, quotes, tables, inline code), syntax-highlighted code blocks with **Copy** and **Download** buttons. Long code lines wrap inside the block.
+- **Clickable links.** `[text](url)` links and bare `http(s)://` URLs open in your default browser. Only `http`, `https` and `mailto` links are opened.
+- **Automatic context compression.** When a chat nears the context limit, older messages are summarized by the model so the conversation can go on. See [Context compression](#context-compression).
 - **Attachments.** Images, audio (`.mp3`, `.wav`) and text files, via the button, drag and drop, or long paste that becomes an attachment.
 - **Server-default aware settings.** Sampling parameters left empty are _not sent_, so llama-server's own values apply. Settings are read from `GET /props`.
 - **Full sampling control:** temperature, top-k, top-p, min-p, repeat/presence/frequency penalty, DRY, max tokens, seed, stop strings.
@@ -29,7 +31,13 @@
     ```bat
     llama-server -m model.gguf --port 9931 --jinja
     ```
-2. Run `llamac.exe`. The default server URL is `http://127.0.0.1:9931`. Change it, and optionally set an API key, under **Settings**.
+2. Run `llamac.exe`. Set the server URL, and optionally an API key, under **Settings**.
+
+## Settings
+
+Settings are grouped into sections: **Connection**, **Chat template**, **Display**, **Sampling**, **Tools & memory** and **Context & compression**. Hover any label or field for an explanation of what it does and what an empty value or `0` means.
+
+Sampling fields left empty are not sent, so llama-server's own values apply. The grey hint in each box shows the server value. **Reset sampling** clears all sampling overrides.
 
 ## Tools: file access and MCP
 
@@ -44,14 +52,19 @@ Turn everything on or off with **Enable tools** in Settings. The model must supp
 | `list_directory`   | List files and folders                        | no         |
 | `read_file`        | Read a text file, optionally a line range     | no         |
 | `search_files`     | Find files by wildcard and search their text  | no         |
+| `grep`             | Regular-expression search in file contents    | no         |
+| `glob`             | Find files by path pattern (`src/**/*.h`)     | no         |
 | `write_file`       | Create, overwrite or append to a file         | yes        |
 | `edit_file`        | Replace an exact piece of text (once, or all) | yes        |
 | `create_directory` | Create a folder and missing parents           | yes        |
+| `move_path`        | Move or rename a file or folder               | yes        |
+| `delete_file`      | Delete one file                               | yes        |
+| `run_command`      | Run a `cmd.exe` command, return its output    | yes        |
 
-- The tools are limited to the **File tools root folder** set in Settings. Paths are resolved to their real location, so links and junctions cannot escape the root.
-- Write, edit and create tools only exist when **Allow file write/edit tools** is ticked.
-- Set the root to `*` for **unrestricted mode**: any path your Windows account can access. In this mode the read tools also ask for approval. Windows permissions still apply.
-- Do not combine unrestricted mode with **Auto-approve ALL tool calls**.
+- The tools are limited to the **Root folder** set in Settings. Paths are resolved to their real location, so links and junctions cannot escape the root. With no root folder there are no file tools.
+- Write, move and delete tools only exist when **Allow file write / edit tools** is ticked.
+- `run_command` only exists when **Allow shell command tool** is ticked. It starts in the root folder, but the command itself can reach anything your Windows account can. It is not sandboxed.
+- Tool results are capped at 60,000 characters.
 
 ### MCP servers
 
@@ -62,7 +75,7 @@ Click **Edit MCP servers...** in Settings to open the built-in `mcp.json` editor
     "mcpServers": {
         "files": {
             "command": "npx",
-            "args": ["-y", "@modelcontextprotocol/server-filesystem", "I:\\AI"],
+            "args": ["-y", "@modelcontextprotocol/server-filesystem", "C:\MCP"],
             "env": {},
             "autoApprove": ["read_file"],
             "timeout": 60
@@ -98,17 +111,33 @@ llamac keeps a small local memory so the model remembers you across chats.
 - Tools: `memory_save` (also updates duplicates), `memory_search`, `memory_list`, `memory_delete`. Save, search and list run without asking, and delete asks first.
 - Toggle it with **Long-term memory** in Settings. You can review or edit `memory.json` in any editor.
 
+## Context compression
+
+With **Auto-compress when context is low** ticked, llamac keeps long chats within the server's context window.
+
+- **When:** before each request, llamac estimates the prompt size (the last measured token count plus about 3 characters per token for anything added since, such as a large tool result). Compression starts when the estimate passes the threshold. It is also checked after every reply.
+- **Threshold:** **Compress at %** of the context. `0` = auto, which keeps `max(15%, 4096 tokens)` free for the reply. Values are limited to 30-95%.
+- **Context size:** the server's `n_ctx` from `/props`, or **Context limit** if you set one (for example to compress earlier than the server requires).
+- **How:** the oldest ~70% of the messages are sent to the model with a request to summarize them. The summary replaces them at the top of the chat ("Summary of earlier messages") and is added to the system message of later requests. The original messages stay available: the previous branch (`‹`) on the summary shows them.
+- **Waiting:** a message sent, or a tool round started, while compression runs waits for it, so the request is built from the compressed chat.
+- **Reasoning models** think before they write the summary. Allow for that: with a 27B Qwen3 model, summarizing an 8k-token transcript took about 3 minutes. The summary request uses your **Template kwargs** and allows up to 6144 tokens.
+- **If it fails,** the status bar shows the reason (server unreachable, timeout, HTTP error, empty reply). The same chat is not retried until it has grown by a few more messages.
+
+A single tool result that is itself almost as large as the context cannot be compressed away, because the newest messages are always kept.
+
 ## Build
 
 Requirements: Visual Studio 2022 (MSVC) on x64 Windows. No third-party libraries.
 
-Open **x64 Native Tools Command Prompt for VS 2022**, then:
+Open **x64 Native Tools Command Prompt for VS 2022** and run `build.bat`.
+
+Link libraries are pulled in through `#pragma comment`. `build.bat` also embeds the application manifest (`/MANIFEST:EMBED`), which enables Common Controls v6. Without it, tooltips, grey hint text and themed controls do not appear. If you build by hand, keep those flags:
 
 ```bat
-cl /O2 /W3 /utf-8 llamac.c
+cl /O2 /W3 /utf-8 llamac.c /link /MANIFEST:EMBED "/MANIFESTUAC:level='asInvoker' uiAccess='false'"
 ```
 
-or run `build.bat`. Link libraries are pulled in through `#pragma comment`, so no extra flags are needed. The version string is `LLAMAC_VERSION` at the top of `llamac.c`.
+The version string is `LLAMAC_VERSION` at the top of `llamac.c`.
 
 ### File tools fail with "Win32 error 5"
 
@@ -176,11 +205,11 @@ The portable modules (`util`, `json`, `config`, `chat_tree`, `tools_core`, `requ
 
 ## How it talks to the server
 
-| Endpoint                    | Purpose                                                    |
-| --------------------------- | ---------------------------------------------------------- |
-| `POST /v1/chat/completions` | Streaming chat (`stream: true`, `timings_per_token: true`) |
-| `GET /props`                | Reads server default sampling values                       |
-| `POST /apply-template`      | Renders the chat template without running inference        |
+| Endpoint                    | Purpose                                                                                 |
+| --------------------------- | --------------------------------------------------------------------------------------- |
+| `POST /v1/chat/completions` | Streaming chat (`stream: true`, `timings_per_token: true`); non-streaming for summaries |
+| `GET /props`                | Reads server default sampling values and the context size                               |
+| `POST /apply-template`      | Renders the chat template without running inference                                     |
 
 Only parameters you set in the client are included in the request. When tools are enabled, the request also carries the `tools` array, and tool results are sent back as `tool` messages.
 
@@ -188,7 +217,8 @@ Only parameters you set in the client are included in the request. When tools ar
 
 - Tool calls are executed with your Windows account's permissions. Keep approval prompts on for write tools and for MCP servers you do not fully trust.
 - MCP servers are programs you start. Only add servers you trust.
-- `Auto-approve ALL tool calls` skips every prompt, and is unsafe with unrestricted file access.
+- `Auto-approve ALL tool calls` skips every prompt, including writes, deletes and shell commands. Combined with the shell tool, the model can run any command without asking.
+- Links in model output are only opened when you click them, and only `http`, `https` and `mailto` links.
 
 ## Limitations
 
