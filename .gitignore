@@ -1,7 +1,7 @@
-release/
-dist/ 
-backup/
-.vscode/
+release
+backup
+.vscode
+.idea
 *.obj
 *.exe
 *.pdb
