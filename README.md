@@ -16,12 +16,13 @@
 - **Rich rendering** in a native RichEdit control: Markdown (headings, lists, quotes, tables, inline code), syntax-highlighted code blocks with **Copy** and **Download** buttons. Long code lines wrap inside the block.
 - **Clickable links.** `[text](url)` links and bare `http(s)://` URLs open in your default browser. Only `http`, `https` and `mailto` links are opened.
 - **Automatic context compression.** When a chat nears the context limit, older messages are summarized by the model so the conversation can go on. See [Context compression](#context-compression).
-- **Attachments.** Images, audio (`.mp3`, `.wav`) and text files, via the button, drag and drop, or long paste that becomes an attachment.
+- **Attachments.** Images, audio (`.mp3`, `.wav`) and text files, via the button, drag and drop onto the window, the input box or the chat view, or a long paste that becomes an attachment.
 - **Server-default aware settings.** Sampling parameters left empty are _not sent_, so llama-server's own values apply. Settings are read from `GET /props`.
 - **Full sampling control:** temperature, top-k, top-p, min-p, repeat/presence/frequency penalty, DRY, max tokens, seed, stop strings.
 - **Advanced:** Jinja `chat_template_kwargs`, `reasoning_format`, extra request JSON, and a **Jinja template viewer** (`POST /apply-template`).
 - **WebUI-compatible import/export** of chats as JSON.
 - **Search** across chat titles and contents.
+- **Chat list menu.** Right-click a chat (or press Shift+F10) to **Rename** it or **Copy original prompt**.
 - **Dark and light themes** with a Windows 11 style frame (DWM).
 - **Portable.** Data is stored in a `data\` folder next to the exe. If that isn't writable, it falls back to `%APPDATA%\llamac`, then `%TEMP%\llamac`.
 
@@ -39,11 +40,17 @@ Settings are grouped into sections: **Connection**, **Chat template**, **Display
 
 Sampling fields left empty are not sent, so llama-server's own values apply. The grey hint in each box shows the server value. **Reset sampling** clears all sampling overrides.
 
+The **System prompt** can hold up to 4095 bytes (accented characters take 2 bytes). **Save** and **Delete** next to the name box keep named prompts in `data\prompts.json`. To change the limit, edit the size of `sys` in `src/config.h` and rebuild. Model names of any length are supported.
+
 ## Tools: file access and MCP
 
 Tools are sent to the model in the `tools` field of each chat request, so you don't need to mention them in the system prompt. The model decides when to call one. Every call shows an approval dialog (**Allow once**, **Always allow this tool (until restart)**, **Deny**) unless the tool is read-only or auto-approved. Up to **Max tool rounds** calls are chained per message.
 
 Turn everything on or off with **Enable tools** in Settings. The model must support tool calling and the server must run with `--jinja`.
+
+### Date and time
+
+`get_datetime` returns the current local date, weekday, time and UTC offset from your computer, so the model never has to guess the date. It is read-only (no approval) and available whenever **Enable tools** is on, with or without a root folder.
 
 ### File tools
 
@@ -118,7 +125,7 @@ With **Auto-compress when context is low** ticked, llamac keeps long chats withi
 - **When:** before each request, llamac estimates the prompt size (the last measured token count plus about 3 characters per token for anything added since, such as a large tool result). Compression starts when the estimate passes the threshold. It is also checked after every reply.
 - **Threshold:** **Compress at %** of the context. `0` = auto, which keeps `max(15%, 4096 tokens)` free for the reply. Values are limited to 30-95%.
 - **Context size:** the server's `n_ctx` from `/props`, or **Context limit** if you set one (for example to compress earlier than the server requires).
-- **How:** the oldest ~70% of the messages are sent to the model with a request to summarize them. The summary replaces them at the top of the chat ("Summary of earlier messages") and is added to the system message of later requests. The original messages stay available: the previous branch (`‹`) on the summary shows them.
+- **How:** the oldest ~70% of the messages are sent to the model with a request to summarize them. The summary replaces them at the top of the chat ("Summary of earlier messages") and is added to the system message of later requests. The original messages stay available: the previous branch (`‹`) on the summary shows them. The chat's first prompt is kept with the summary and sent to the model along with it. It is not shown in the chat, but **Copy original prompt** in the chat list menu still copies it.
 - **Waiting:** a message sent, or a tool round started, while compression runs waits for it, so the request is built from the compressed chat.
 - **Reasoning models** think before they write the summary. Allow for that: with a 27B Qwen3 model, summarizing an 8k-token transcript took about 3 minutes. The summary request uses your **Template kwargs** and allows up to 6144 tokens.
 - **If it fails,** the status bar shows the reason (server unreachable, timeout, HTTP error, empty reply). The same chat is not retried until it has grown by a few more messages.
@@ -159,6 +166,7 @@ Then rebuild.
 | `Ctrl+Shift+D` | Delete chat    |
 | `Ctrl+K`       | Search chats   |
 | `Ctrl+B`       | Toggle sidebar |
+| `Shift+F10`    | Menu for the selected chat in the list (right-click works too) |
 
 ## Project layout
 
