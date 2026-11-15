@@ -19,6 +19,7 @@ static int g_tl_init;
 static char *fs_call(const char *tool, J *args);                 /* tools_fs.h */
 static char *mcp_call_tool(int srv, const char *rname, J *args); /* mcp.h */
 static char *mem_call(const char *tool, J *args);
+static char *date_call(void);      /* below */
 static void mem_register(void);    /* memory.h */
 static void fs_register(void);     /* tools_fs.h */
 static void mcp_start_async(void); /* mcp.h */
@@ -269,7 +270,9 @@ static char *tool_execute(const char *name, const char *args)
 
         return xstrdup(message);
     }
-    if (t.kind == 0 && !strncmp(t.rname, "memory_", 7))
+    if (t.kind == 0 && !strcmp(t.rname, "get_datetime"))
+        res = date_call();
+    else if (t.kind == 0 && !strncmp(t.rname, "memory_", 7))
         res = mem_call(t.rname, a);
     else
         res = t.kind == 0 ? fs_call(t.rname, a) : mcp_call_tool(t.srv, t.rname, a);
@@ -338,10 +341,39 @@ static void tool_run_start(const char *calls)
     }
 }
 
+/* ---------- get_datetime: current local date/time (models cannot know it; read-only, runs without asking) ---------- */
+static char *date_call(void)
+{
+    static const char *wd[] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
+    SYSTEMTIME lt, ut;
+    TIME_ZONE_INFORMATION tz;
+    DWORD r = GetTimeZoneInformation(&tz);
+    LONG bias = tz.Bias + (r == TIME_ZONE_ID_DAYLIGHT ? tz.DaylightBias : tz.StandardBias); /* minutes, UTC = local + bias */
+    char out[300], sign = bias <= 0 ? '+' : '-';
+    GetLocalTime(&lt);
+    GetSystemTime(&ut);
+    if (bias < 0)
+        bias = -bias;
+    snprintf(out, sizeof out, "Local date: %04d-%02d-%02d (%s)\nLocal time: %02d:%02d:%02d\nUTC offset: %c%02ld:%02ld\nISO 8601: %04d-%02d-%02dT%02d:%02d:%02d%c%02ld:%02ld\nUTC: %04d-%02d-%02dT%02d:%02d:%02dZ",
+             lt.wYear, lt.wMonth, lt.wDay, wd[lt.wDayOfWeek % 7], lt.wHour, lt.wMinute, lt.wSecond,
+             sign, bias / 60, bias % 60,
+             lt.wYear, lt.wMonth, lt.wDay, lt.wHour, lt.wMinute, lt.wSecond, sign, bias / 60, bias % 60,
+             ut.wYear, ut.wMonth, ut.wDay, ut.wHour, ut.wMinute, ut.wSecond);
+    return xstrdup(out);
+}
+static void date_register(void)
+{
+    if (!G.tools_on)
+        return;
+    tool_add("get_datetime", "Get the current local date, weekday, time and UTC offset from the user's computer. Call it whenever the answer depends on today's date or the time; never guess the date.",
+             "{\"type\":\"object\",\"properties\":{}}", 0, 0, "get_datetime", 1, 0);
+}
+
 static void tools_apply_settings(void)
 {
     fs_register();
     mem_register();
+    date_register();
     if (G.tools_on && !g_mcp_started)
         mcp_start_async();
 }
@@ -349,6 +381,7 @@ static void tools_startup(void)
 {
     fs_register();
     mem_register();
+    date_register();
     if (G.tools_on)
         mcp_start_async();
 }

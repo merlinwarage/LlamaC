@@ -19,6 +19,11 @@ static LRESULT CALLBACK InputProc(HWND h, UINT m, WPARAM w, LPARAM l)
             return 0;
         }
     }
+    if (m == WM_DROPFILES)
+    { /* dropped on the input box itself: the main window handler attaches the files */
+        SendMessageW(hMain, WM_DROPFILES, w, l);
+        return 0;
+    }
     if (m == WM_PASTE && G.smartpaste && OpenClipboard(h))
     {
         HANDLE g = GetClipboardData(CF_UNICODETEXT);
@@ -197,7 +202,13 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l)
         mkbtn(h, L"Delete chat", IDC_DELC);
         mkbtn(h, L"+", IDC_ATTACH);
         mkbtn(h, L"Send", IDC_SEND);
+        /* drops also work when the app runs elevated (UIPI would otherwise block them from Explorer) */
+        ChangeWindowMessageFilterEx(h, WM_DROPFILES, MSGFLT_ALLOW, NULL);
+        ChangeWindowMessageFilterEx(h, 0x0049 /* WM_COPYGLOBALDATA */, MSGFLT_ALLOW, NULL);
         DragAcceptFiles(h, TRUE);
+        DragAcceptFiles(hInput, TRUE);
+        RevokeDragDrop(hChat); /* the RichEdit registers its own OLE drop target, which swallows file drops */
+        DragAcceptFiles(hChat, TRUE);
         set_theme();
         PostMessageW(h, WM_APP_INIT, 0, 0);
         {
@@ -312,6 +323,7 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l)
             add_file(f);
         }
         DragFinish(d);
+        SetFocus(hInput);
         return 0;
     }
     case WM_COMMAND:

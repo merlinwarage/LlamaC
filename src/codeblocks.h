@@ -423,6 +423,11 @@ static LRESULT CALLBACK ChatSub(HWND h, UINT m, WPARAM w, LPARAM l, UINT_PTR id,
     }
 #endif
 
+    if (m == WM_DROPFILES)
+    { /* files dropped on the chat view are attached to the next message */
+        SendMessageW(hMain, WM_DROPFILES, w, l);
+        return 0;
+    }
     if (m == WM_SETCURSOR)
     {
         POINT pt;
