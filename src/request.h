@@ -93,6 +93,11 @@ static void build_messages(SB *s, Conv *c, const Cfg *g)
             sb_puts(&sy, "\n\n");
         sb_puts(&sy, "Summary of the earlier part of this conversation (older messages were compressed):\n");
         sb_puts(&sy, c->n[p[0]].content);
+        if (c->n[p[0]].reasoning[0])
+        {
+            sb_puts(&sy, "\n\nThe user's original prompt that started this conversation:\n");
+            sb_puts(&sy, c->n[p[0]].reasoning);
+        }
         i0 = 1;
     }
     if (sy.n)

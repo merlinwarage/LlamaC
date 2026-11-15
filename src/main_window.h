@@ -273,6 +273,34 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l)
         SetTextColor((HDC)w, cDim);
         SetBkColor((HDC)w, cBg);
         return (LRESULT)hbrBg;
+    case WM_CONTEXTMENU:
+        if ((HWND)w == hList)
+        {
+            POINT pt;
+            pt.x = (short)LOWORD(l);
+            pt.y = (short)HIWORD(l);
+            if (l == -1)
+            { /* keyboard (Shift+F10 / menu key): at the selected item */
+                RECT ir;
+                int s = (int)SendMessageW(hList, LB_GETCURSEL, 0, 0);
+                if (s < 0 || SendMessageW(hList, LB_GETITEMRECT, (WPARAM)s, (LPARAM)&ir) == LB_ERR)
+                    return 0;
+                pt.x = ir.left + 20;
+                pt.y = ir.bottom;
+                ClientToScreen(hList, &pt);
+                conv_menu(s, pt.x, pt.y);
+            }
+            else
+            {
+                POINT cp = pt;
+                ScreenToClient(hList, &cp);
+                DWORD r = (DWORD)SendMessageW(hList, LB_ITEMFROMPOINT, 0, MAKELPARAM(cp.x, cp.y));
+                if (HIWORD(r) == 0 && (int)LOWORD(r) < nmap)
+                    conv_menu((int)LOWORD(r), pt.x, pt.y);
+            }
+            return 0;
+        }
+        break;
     case WM_DROPFILES:
     {
         HDROP d = (HDROP)w;
@@ -308,14 +336,10 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l)
             return 0;
         if (id == IDC_MODEL && nt == CBN_SELCHANGE)
         {
-            wchar_t t[160];
             int s = (int)SendMessageW(hModel, CB_GETCURSEL, 0, 0);
             if (s >= 0)
             {
-                SendMessageW(hModel, CB_GETLBTEXT, (WPARAM)s, (LPARAM)t);
-                char *u = u_from(t);
-                strncpy(G.model, u, sizeof G.model - 1);
-                free(u);
+                model_from_combo(s);
                 cfg_save();
             }
             return 0;
@@ -563,6 +587,19 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l)
                             Node *kn;
                             Node *op;
                             setstr(&tc->n[s].content, nl2 + 1);
+                            { /* keep the original prompt: the summary node's `reasoning` field holds it (inherited when
+                                 an earlier summary is compressed again) */
+                                int t = keep;
+                                while (tc->n[t].parent >= 0 && tc->n[t].parent != tc->root)
+                                    t = tc->n[t].parent;
+                                const char *orig = tc->n[t].role == ROLE_SYS ? tc->n[t].reasoning
+                                                   : tc->n[t].role == ROLE_USER ? tc->n[t].content
+                                                                                : "";
+                                SB o = {0};
+                                compact_clip(&o, orig, 20000);
+                                setstr(&tc->n[s].reasoning, o.p ? o.p : "");
+                                free(o.p);
+                            }
                             kn = &tc->n[keep];
                             op = &tc->n[kn->parent];
                             for (int k = 0; k < op->nk; k++)

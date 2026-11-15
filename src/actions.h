@@ -290,6 +290,173 @@ static void act_delconv(void)
     select_conv(convs[0]);
     save_all();
 }
+/* ---------- chat list context menu: rename / copy original prompt ---------- */
+static wchar_t g_ren_buf[256];
+static int g_ren_done, g_ren_ok;
+static LRESULT CALLBACK RenProc(HWND h, UINT m, WPARAM w, LPARAM l)
+{
+    switch (m)
+    {
+    case WM_COMMAND:
+        if (HIWORD(w) != BN_CLICKED)
+            break; /* edit-control notifications (EN_*) must not close the dialog */
+        if (LOWORD(w) == IDOK)
+        {
+            GetWindowTextW(GetDlgItem(h, 100), g_ren_buf, 256);
+            g_ren_ok = 1;
+            g_ren_done = 1;
+            return 0;
+        }
+        if (LOWORD(w) == IDCANCEL)
+        {
+            g_ren_done = 1;
+            return 0;
+        }
+        break;
+    case WM_CTLCOLOREDIT:
+        SetTextColor((HDC)w, cFg);
+        SetBkColor((HDC)w, cSurf);
+        return (LRESULT)hbrSurf;
+    case WM_CLOSE:
+        g_ren_done = 1;
+        return 0;
+    }
+    return DefWindowProcW(h, m, w, l);
+}
+/* modal single-line input; returns a malloc'ed UTF-8 string, or NULL when cancelled */
+static char *ask_name(const char *init)
+{
+    static int reg = 0;
+    if (!reg)
+    {
+        WNDCLASSEXW wc;
+        memset(&wc, 0, sizeof wc);
+        wc.cbSize = sizeof wc;
+        wc.lpfnWndProc = RenProc;
+        wc.hInstance = GetModuleHandleW(NULL);
+        wc.hCursor = LoadCursorW(NULL, IDC_ARROW);
+        wc.hbrBackground = hbrBg;
+        wc.lpszClassName = L"LCRen";
+        RegisterClassExW(&wc);
+        reg = 1;
+    }
+    RECT r;
+    GetWindowRect(hMain, &r);
+    HWND h = CreateWindowExW(WS_EX_DLGMODALFRAME, L"LCRen", L"Rename chat", WS_POPUP | WS_CAPTION | WS_SYSMENU, r.left + 120, r.top + 120, 420, 130, hMain, NULL, GetModuleHandleW(NULL), NULL);
+    wchar_t *wi = w_from(init);
+    HWND e = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", wi, WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL, 12, 12, 380, 24, h, (HMENU)100, NULL, NULL);
+    HWND b1 = CreateWindowExW(0, L"BUTTON", L"OK", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON, 222, 48, 80, 26, h, (HMENU)(INT_PTR)IDOK, NULL, NULL);
+    HWND b2 = CreateWindowExW(0, L"BUTTON", L"Cancel", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 312, 48, 80, 26, h, (HMENU)(INT_PTR)IDCANCEL, NULL, NULL);
+    free(wi);
+    SendMessageW(e, WM_SETFONT, (WPARAM)hFont, TRUE);
+    SendMessageW(b1, WM_SETFONT, (WPARAM)hFont, TRUE);
+    SendMessageW(b2, WM_SETFONT, (WPARAM)hFont, TRUE);
+    SendMessageW(e, EM_SETLIMITTEXT, 200, 0);
+    apply_frame(h);
+    g_ren_done = g_ren_ok = 0;
+    EnableWindow(hMain, FALSE);
+    ShowWindow(h, SW_SHOW);
+    SetFocus(e);
+    SendMessageW(e, EM_SETSEL, 0, -1);
+    MSG msg;
+    while (!g_ren_done && GetMessageW(&msg, NULL, 0, 0) > 0)
+    {
+        if (msg.message == WM_KEYDOWN && (msg.wParam == VK_RETURN || msg.wParam == VK_ESCAPE) && GetAncestor(msg.hwnd, GA_ROOT) == h)
+        {
+            SendMessageW(h, WM_COMMAND, msg.wParam == VK_RETURN ? IDOK : IDCANCEL, 0);
+            continue;
+        }
+        TranslateMessage(&msg);
+        DispatchMessageW(&msg);
+    }
+    EnableWindow(hMain, TRUE);
+    DestroyWindow(h);
+    SetForegroundWindow(hMain);
+    return g_ren_ok ? u_from(g_ren_buf) : NULL;
+}
+/* the prompt that started the chat: the first user message, or the one stored in a compression summary */
+static const char *conv_orig_prompt(Conv *c)
+{
+    for (int i = c->leaf; i >= 0; i = c->n[i].parent)
+        if (c->n[i].parent == c->root || c->n[i].parent < 0)
+        {
+            if (c->n[i].role == ROLE_SYS)
+                return c->n[i].reasoning;
+            return c->n[i].role == ROLE_USER ? c->n[i].content : "";
+        }
+    return "";
+}
+static void clip_put(const char *utf8, const char *okmsg)
+{
+    SB s = {0};
+    for (const char *p = utf8; *p; p++)
+    {
+        if (*p == '\r')
+            continue;
+        if (*p == '\n')
+            sb_putc(&s, '\r');
+        sb_putc(&s, *p);
+    }
+    wchar_t *w = w_from(sbs(&s));
+    size_t sz = (wcslen(w) + 1) * 2;
+    HGLOBAL g = GlobalAlloc(GMEM_MOVEABLE, sz);
+    if (g && OpenClipboard(hMain))
+    {
+        memcpy(GlobalLock(g), w, sz);
+        GlobalUnlock(g);
+        EmptyClipboard();
+        SetClipboardData(CF_UNICODETEXT, g);
+        CloseClipboard();
+        set_status(okmsg);
+    }
+    else if (g)
+        GlobalFree(g);
+    free(w);
+    free(s.p);
+}
+enum
+{
+    IDM_RENAME = 9001,
+    IDM_COPYPROMPT
+};
+static void conv_menu(int item, int x, int y)
+{
+    Conv *c;
+    HMENU m;
+    int cmd;
+    if (item < 0 || item >= nmap)
+        return;
+    c = convs[lmap[item]];
+    m = CreatePopupMenu();
+    AppendMenuW(m, MF_STRING, IDM_RENAME, L"Rename...");
+    AppendMenuW(m, MF_STRING | (conv_orig_prompt(c)[0] ? 0 : MF_GRAYED), IDM_COPYPROMPT, L"Copy original prompt");
+    cmd = (int)TrackPopupMenu(m, TPM_RETURNCMD | TPM_RIGHTBUTTON, x, y, 0, hMain, NULL);
+    DestroyMenu(m);
+    if (cmd == IDM_COPYPROMPT)
+        clip_put(conv_orig_prompt(c), "Original prompt copied");
+    else if (cmd == IDM_RENAME)
+    {
+        char *nm = ask_name(c->name);
+        if (nm)
+        {
+            char *t = nm;
+            size_t l;
+            while (*t == ' ')
+                t++;
+            l = strlen(t);
+            while (l && t[l - 1] == ' ')
+                t[--l] = 0;
+            if (*t)
+            {
+                setstr(&c->name, t);
+                c->dirty = 1;
+                refresh_list();
+                save_all();
+            }
+            free(nm);
+        }
+    }
+}
 static void act_export(void)
 {
     if (!cur)

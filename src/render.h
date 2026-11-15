@@ -455,7 +455,8 @@ static void render_node(const int *p, int i, int n)
         re_add(b, strlen(b), cDim, 0, FACE);
     }
     g_rnode = p[i];
-    if (G.thoughts)
+    /* a summary node keeps the original prompt in `reasoning` (for the chat-list "Copy original prompt"); never shown here */
+    if (!summ && G.thoughts)
         render_think(m->reasoning, strlen(m->reasoning));
     if (m->role == ROLE_TOOL)
         render_tool_result(m);

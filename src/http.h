@@ -124,6 +124,25 @@ static char *http_req(const wchar_t *method, const char *ep, const char *body)
 {
     return http_req_t(method, ep, body, 15000);
 }
+/* Copy combo item `idx` into G.model; buffer sized from the real length (long model names overflowed a fixed one). */
+static void model_from_combo(int idx)
+{
+    LRESULT n = SendMessageW(hModel, CB_GETLBTEXTLEN, (WPARAM)idx, 0);
+    if (n == CB_ERR || n < 0)
+        return;
+    wchar_t *w = (wchar_t *)malloc(((size_t)n + 1) * sizeof(wchar_t));
+    if (!w)
+        return;
+    SendMessageW(hModel, CB_GETLBTEXT, (WPARAM)idx, (LPARAM)w);
+    char *u = u_from(w);
+    free(w);
+    if (u)
+    {
+        strncpy(G.model, u, sizeof G.model - 1);
+        G.model[sizeof G.model - 1] = 0;
+        free(u);
+    }
+}
 static void refresh_models(void)
 {
     char *b;
@@ -156,11 +175,7 @@ static void refresh_models(void)
     if (sel < 0 && cnt > 0)
     {
         sel = 0;
-        wchar_t w[160];
-        SendMessageW(hModel, CB_GETLBTEXT, 0, (LPARAM)w);
-        char *u = u_from(w);
-        strncpy(G.model, u, sizeof G.model - 1);
-        free(u);
+        model_from_combo(0);
     }
     if (sel >= 0)
         SendMessageW(hModel, CB_SETCURSEL, (WPARAM)sel, 0);

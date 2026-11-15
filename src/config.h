@@ -5,7 +5,7 @@
 /* ======================= settings ======================= */
 typedef struct
 {
-    char url[256], key[256], model[160], sys[2048], sysname[80], stop[256], custom[2048], kwargs[512], rfmt[24];
+    char url[256], key[256], model[512], sys[2048], sysname[80], stop[256], custom[2048], kwargs[512], rfmt[24];
     /* sampling overrides are strings: EMPTY = "not set -> use the llama-server value" */
     char temp[24], top_k[24], top_p[24], min_p[24], rep[24], pres[24], freq[24], dry[24], maxtok[24], seed[24];
     int dark, thoughts, stats, smartpaste;
