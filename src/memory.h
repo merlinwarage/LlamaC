@@ -115,8 +115,32 @@ static void mem_oneline(SB *o, const char *t)
         sb_putc(o, (*t == '\n' || *t == '\r') ? ' ' : *t);
 }
 
-/* text for the system prompt; NULL when memory is disabled (caller frees) */
-static char *mem_digest(void)
+/* BM25 scores of every memory against q (text + category); caller frees */
+static double *mem_scores_locked(const char *q)
+{
+    double *sc = (double *)calloc((size_t)(g_nmem ? g_nmem : 1), sizeof(double));
+    const char **docs = (const char **)malloc((size_t)(g_nmem ? g_nmem : 1) * sizeof(char *));
+    char **tmp = (char **)malloc((size_t)(g_nmem ? g_nmem : 1) * sizeof(char *));
+    for (int i = 0; i < g_nmem; i++)
+    {
+        SB d = {0};
+        sb_puts(&d, g_mem[i].text);
+        sb_putc(&d, ' ');
+        sb_puts(&d, g_mem[i].cat);
+        tmp[i] = d.p;
+        docs[i] = d.p;
+    }
+    if (q && *q)
+        tx_bm25(q, docs, g_nmem, sc);
+    for (int i = 0; i < g_nmem; i++)
+        free(tmp[i]);
+    free(tmp);
+    free((void *)docs);
+    return sc;
+}
+/* Text for the system prompt; NULL when memory is disabled (caller frees). Pinned facts first, then the facts
+   most relevant to `query` (the chat's first request), then the newest, up to MEM_DIGEST_CHARS. */
+static char *mem_digest_for(const char *query)
 {
     SB o = {0};
     if (!G.mem_on)
@@ -127,20 +151,37 @@ static char *mem_digest(void)
     if (g_nmem)
     {
         size_t start = o.n;
-        for (int pass = 0; pass < 2; pass++)
-            for (int i = g_nmem - 1; i >= 0; i--)
-            {
-                Mem *m = &g_mem[i];
-                if ((m->pinned ? 0 : 1) != pass)
-                    continue;
-                if (o.n - start > MEM_DIGEST_CHARS)
+        double *sc = mem_scores_locked(query);
+        char *used = (char *)calloc((size_t)g_nmem, 1);
+        int shown = 0;
+        for (int pass = 0; pass < 3; pass++)
+            for (;;)
+            { /* pass 0: pinned, newest first; 1: relevant, best first; 2: the rest, newest first */
+                int best = -1;
+                for (int i = g_nmem - 1; i >= 0; i--)
+                {
+                    Mem *m = &g_mem[i];
+                    if (used[i] || (pass == 0 && !m->pinned) || (pass == 1 && sc[i] <= 0))
+                        continue;
+                    if (best < 0 || (pass == 1 && sc[i] > sc[best]))
+                        best = i;
+                    if (pass != 1)
+                        break;
+                }
+                if (best < 0 || o.n - start > MEM_DIGEST_CHARS)
                     break;
+                used[best] = 1;
+                shown++;
                 sb_puts(&o, "- [");
-                sb_puts(&o, m->cat);
+                sb_puts(&o, g_mem[best].cat);
                 sb_puts(&o, "] ");
-                mem_oneline(&o, m->text);
+                mem_oneline(&o, g_mem[best].text);
                 sb_putc(&o, '\n');
             }
+        if (shown < g_nmem)
+            sb_printf(&o, "(%d more saved; use memory_search to find them.)\n", g_nmem - shown);
+        free(sc);
+        free(used);
     }
     else
         sb_puts(&o, "(nothing saved yet)\n");
@@ -264,7 +305,7 @@ static char *mem_t_search(J *a)
     int lim = (int)j_num(j_get(a, "limit"), 10);
     char words[16][48];
     int nw = 0;
-    int score[MEM_MAX];
+    double score[MEM_MAX], *bm;
     SB o = {0};
     int shown = 0;
     if (!q || !*q)
@@ -278,7 +319,7 @@ static char *mem_t_search(J *a)
         strncpy(tmp, q, sizeof tmp - 1);
         tmp[sizeof tmp - 1] = 0;
         for (char *w = strtok(tmp, " ,.;:!?\t\n"); w && nw < 16; w = strtok(NULL, " ,.;:!?\t\n"))
-            if (strlen(w) > 1)
+            if (strlen(w) > 2)
             {
                 strncpy(words[nw], w, 47);
                 words[nw][47] = 0;
@@ -287,13 +328,15 @@ static char *mem_t_search(J *a)
     }
     mem_lock();
     mem_load_locked();
+    bm = mem_scores_locked(q);
     for (int i = 0; i < g_nmem; i++)
-    {
-        score[i] = 0;
+    { /* BM25 on whole words, plus partial-word hits ("power" finds "PowerShell") */
+        score[i] = bm[i];
         for (int k = 0; k < nw; k++)
             if (StrStrIA(g_mem[i].text, words[k]) || StrStrIA(g_mem[i].cat, words[k]))
-                score[i]++;
+                score[i] += 0.5;
     }
+    free(bm);
     while (shown < lim)
     {
         int best = -1;

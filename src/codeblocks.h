@@ -74,9 +74,11 @@ static int nblk, capblk;
 typedef struct
 {
     LONG a, b;
-    int blk, act; /* act: 0 copy, 1 download, 2 think toggle, 3 open url */
+    int blk, act; /* act: 0 copy, 1 download, 2 think toggle, 3 open url, 4 uncertain token (blk = node) */
     char *url;    /* act 3 only */
+    int tok;      /* act 4: index into the node's TokInfo */
 } LinkR;
+static void act_branch_token(int node, int tok, const char *alt); /* actions.h */
 static LinkR *links;
 static int nlinks, caplinks;
 typedef struct
@@ -110,7 +112,86 @@ static LinkR *link_new(LONG a, LONG b, int blk, int act)
     k->blk = blk;
     k->act = act;
     k->url = NULL;
+    k->tok = 0;
     return k;
+}
+/* inserts a link keeping `links` sorted by position (link_at binary-searches it); 0 when it would overlap one */
+static int link_insert(LONG a, LONG b, int blk, int act, int tok)
+{
+    int i = nlinks;
+    while (i > 0 && links[i - 1].a >= b)
+        i--;
+    if (i > 0 && links[i - 1].b > a)
+        return 0;
+    if (i < nlinks && links[i].a < b)
+        return 0;
+    link_new(0, 0, 0, 0); /* grows the array; the new last slot is overwritten by the shift */
+    memmove(&links[i + 1], &links[i], (size_t)(nlinks - 1 - i) * sizeof(LinkR));
+    links[i].a = a;
+    links[i].b = b;
+    links[i].blk = blk;
+    links[i].act = act;
+    links[i].url = NULL;
+    links[i].tok = tok;
+    return 1;
+}
+/* click on a shaded token: what else the model considered there; picking one continues the answer from it */
+static void token_menu(int node, int tok)
+{
+    HMENU m;
+    POINT pt;
+    int cmd, k = 0;
+    char *alts[8];
+    TokInfo *t;
+    wchar_t hdr[120];
+    if (!cur || node < 0 || node >= cur->cnt || tok < 0 || tok >= cur->n[node].ntk)
+        return;
+    t = &cur->n[node].tk[tok];
+    m = CreatePopupMenu();
+    _snwprintf(hdr, 120, L"Model was %d%% sure here. Continue with:", (int)(t->p * 100 + 0.5f));
+    hdr[119] = 0;
+    AppendMenuW(m, MF_STRING | MF_GRAYED, 0, hdr);
+    AppendMenuW(m, MF_SEPARATOR, 0, NULL);
+    for (char *s = t->alts; *s && k < 8;)
+    {
+        char *f = strchr(s, '\x1F'), *e = f ? strchr(f, '\x1E') : NULL;
+        SB lab = {0};
+        wchar_t *w;
+        int same;
+        if (!f || !e)
+            break;
+        alts[k] = xstrndup(s, (size_t)(f - s));
+        same = (int)strlen(alts[k]) == t->len && !strncmp(alts[k], cur->n[node].content + t->off, (size_t)t->len);
+        for (const char *q = alts[k]; *q; q++) /* make whitespace visible in the menu */
+        {
+            if (*q == '\n')
+                sb_puts(&lab, "\xE2\x8F\x8E");
+            else if (*q == ' ')
+                sb_puts(&lab, "\xC2\xB7");
+            else if (*q == '\t')
+                sb_puts(&lab, "\xE2\x86\x92");
+            else if (*q == '&')
+                sb_puts(&lab, "&&");
+            else
+                sb_putc(&lab, *q);
+        }
+        sb_printf(&lab, "\t%.0f%%%s", atof(f + 1) * 100, same ? "  (chosen)" : "");
+        w = w_from(sbs(&lab));
+        AppendMenuW(m, MF_STRING | (same ? MF_GRAYED : 0), (UINT_PTR)(1000 + k), w);
+        free(w);
+        free(lab.p);
+        k++;
+        s = e + 1;
+    }
+    if (!k)
+        AppendMenuW(m, MF_STRING | MF_GRAYED, 0, L"(no alternatives recorded)");
+    GetCursorPos(&pt);
+    cmd = (int)TrackPopupMenu(m, TPM_RETURNCMD | TPM_RIGHTBUTTON, pt.x, pt.y, 0, hMain, NULL);
+    DestroyMenu(m);
+    if (cmd >= 1000 && cmd < 1000 + k)
+        act_branch_token(node, tok, alts[cmd - 1000]);
+    for (int i = 0; i < k; i++)
+        free(alts[i]);
 }
 /* current end of the RichEdit text (where the next re_add lands) */
 static LONG re_pos(void)
@@ -451,6 +532,8 @@ static LRESULT CALLBACK ChatSub(HWND h, UINT m, WPARAM w, LPARAM l, UINT_PTR id,
                 blk_save(links[k].blk);
             else if (links[k].act == 3)
                 url_open(links[k].url);
+            else if (links[k].act == 4)
+                token_menu(links[k].blk, links[k].tok);
             else
                 think_toggle(links[k].blk);
         }

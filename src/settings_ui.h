@@ -31,11 +31,17 @@ static void strip_cr(char *s)
     *d = 0;
 }
 
-/* ---------- saved system prompts: data\prompts.json = [{"name":..,"text":..}, ...] ---------- */
+/* ---------- profiles (saved prompts): data\prompts.json = [{"name":..,"text":..,"remind":..,"toolset":..,"temp":..}, ...]
+   Besides the system prompt a profile keeps the settings that suit a kind of work and a model: the reminder, the
+   tool set, sampling values, the reasoning budget and the template kwargs. Entries of older versions have only
+   name and text; picking them changes only the prompt. */
+static const char *const PROF_KEYS[] = {"remind", "toolset", "temp", "top_k", "top_p", "min_p", "rbud", "kwargs"};
+#define NPK ((int)(sizeof PROF_KEYS / sizeof PROF_KEYS[0]))
 typedef struct
 {
     char name[80];
     char *text;
+    char *vals[NPK]; /* NULL = not stored in this profile */
 } SysPrompt;
 static SysPrompt *sysP;
 static int nSysP;
@@ -44,10 +50,41 @@ static HWND hSysEdit, hSysCombo;
 static void sysp_free(void)
 {
     for (int i = 0; i < nSysP; i++)
+    {
         free(sysP[i].text);
+        for (int k = 0; k < NPK; k++)
+            free(sysP[i].vals[k]);
+    }
     free(sysP);
     sysP = NULL;
     nSysP = 0;
+}
+/* the value a settings control shows (combo: its index), malloc'ed */
+static char *ctl_value(int fi)
+{
+    char b[16];
+    if (fi < 0 || !setCtl[fi])
+        return NULL;
+    if (!strcmp(FIELDS[fi].key, "toolset"))
+    {
+        int s = (int)SendMessageW(setCtl[fi], CB_GETCURSEL, 0, 0);
+        snprintf(b, sizeof b, "%d", s < 0 ? 0 : s);
+        return xstrdup(b);
+    }
+    return get_text(setCtl[fi]);
+}
+static void ctl_set(int fi, const char *v)
+{
+    if (fi < 0 || !setCtl[fi] || !v)
+        return;
+    if (!strcmp(FIELDS[fi].key, "toolset"))
+        SendMessageW(setCtl[fi], CB_SETCURSEL, (WPARAM)atoi(v), 0);
+    else
+    {
+        wchar_t *w = w_from(v);
+        SetWindowTextW(setCtl[fi], w);
+        free(w);
+    }
 }
 static void sysp_load(void)
 {
@@ -73,6 +110,19 @@ static void sysp_load(void)
                 continue;
             snprintf(sysP[nSysP].name, sizeof sysP[nSysP].name, "%s", nm);
             sysP[nSysP].text = xstrdup(tx ? tx : "");
+            for (int k = 0; k < NPK; k++)
+            {
+                J *v = j_get(c, PROF_KEYS[k]);
+                char nb[40];
+                sysP[nSysP].vals[k] = NULL;
+                if (v && v->t == J_STR)
+                    sysP[nSysP].vals[k] = xstrdup(v->str);
+                else if (v && v->t == J_NUM)
+                {
+                    fmt_num(nb, v->num);
+                    sysP[nSysP].vals[k] = xstrdup(nb);
+                }
+            }
             nSysP++;
         }
     }
@@ -89,6 +139,12 @@ static void sysp_save(void)
         sb_json(&o, sysP[i].name);
         sb_puts(&o, ", \"text\": ");
         sb_json(&o, sysP[i].text);
+        for (int k = 0; k < NPK; k++)
+            if (sysP[i].vals[k])
+            {
+                sb_printf(&o, ", \"%s\": ", PROF_KEYS[k]);
+                sb_json(&o, sysP[i].vals[k]);
+            }
         sb_puts(&o, i + 1 < nSysP ? "},\n" : "}\n");
     }
     sb_puts(&o, "]\n");
@@ -143,6 +199,8 @@ static void sysp_on_select(void)
     wchar_t *w = sys_to_edit(sysP[k].text);
     SetWindowTextW(hSysEdit, w);
     free(w);
+    for (int i = 0; i < NPK; i++) /* the profile's other settings (only the ones it stores) */
+        ctl_set(fidx(PROF_KEYS[i]), sysP[k].vals[i]);
 }
 static void sysp_on_save(HWND h)
 {
@@ -161,11 +219,16 @@ static void sysp_on_save(HWND h)
     {
         sysP = (SysPrompt *)realloc(sysP, (nSysP + 1) * sizeof *sysP);
         k = nSysP++;
-        sysP[k].text = NULL;
+        memset(&sysP[k], 0, sizeof sysP[k]);
     }
     snprintf(sysP[k].name, sizeof sysP[k].name, "%s", nm);
     free(sysP[k].text);
     sysP[k].text = tx;
+    for (int i = 0; i < NPK; i++)
+    {
+        free(sysP[k].vals[i]);
+        sysP[k].vals[i] = ctl_value(fidx(PROF_KEYS[i]));
+    }
     sysp_save();
     sysp_fill_combo(sysP[k].name);
     free(nm);
@@ -184,6 +247,8 @@ static void sysp_on_delete(HWND h)
     if (MessageBoxW(h, q, L"Delete prompt", MB_YESNO | MB_ICONQUESTION) != IDYES)
         return;
     free(sysP[k].text);
+    for (int i = 0; i < NPK; i++)
+        free(sysP[k].vals[i]);
     memmove(sysP + k, sysP + k + 1, (nSysP - k - 1) * sizeof *sysP);
     nSysP--;
     sysp_save();
@@ -201,18 +266,24 @@ static const SItem SLAY_L[] = {
     {"#", "Connection", NULL, 0},
     {"url", NULL, "Address of llama-server, e.g. http://127.0.0.1:8080. Models come from /v1/models; the context size and the server's sampling defaults from /props.", 0},
     {"key", NULL, "Sent as 'Authorization: Bearer <key>'. Only needed when llama-server was started with --api-key.", 0},
-    {"#", "Chat template", NULL, 0},
-    {"sys", NULL, "Sent as the system message at the start of every request. Save / Delete keep named prompts in data\\prompts.json.", 0},
+    {"#", "Chat template & profiles", NULL, 0},
+    {"sys", NULL, "Sent as the system message at the start of every request. Save / Delete keep named profiles in data\\prompts.json: the prompt together with the reminder, tool set, temperature, top-k/p, min-p, reasoning budget and template kwargs.", 0},
+    {"remind", "Reminder", "A few words added to the end of your latest message when it is sent (not stored, not shown), e.g. 'Answer in Hungarian. Keep it short.' Small models follow instructions at the end of the context better than ones at the start. Costs a few tokens; the prompt cache stays valid.", 0},
+    {"toolset", "Tool set", "Which tools the model gets. All: file, shell, memory, guides, MCP. Chat: date, memory, guides and MCP only - fewer tool definitions (often 1-2k tokens less per request) and fewer wrong tool choices. None: no tools at all (needed for token confidence shading).", 0},
     {"kwargs", "Template kwargs", "JSON object passed to the server's Jinja chat template as chat_template_kwargs, e.g. {\"enable_thinking\": false}. Ignored unless it is a valid JSON object. Also sent with the compression summary request.", 0},
     {"rfmt", "Reasoning format", "Sent as reasoning_format: auto, none or deepseek. Empty = server setting. Decides whether the model's thinking arrives separately (shown as a Thinking block) or inline in the answer.", 0},
     {"stop", "Stop strings", "Generation stops when one of these appears. Separate several with |, e.g.  </answer>|###", 0},
     {"custom", "Extra request JSON", "Extra fields added to every chat request, written as a JSON object, e.g. {\"n_probs\": 0}. For server options that have no setting here.", 0},
-    {"#", "Display", NULL, 0},
-    {"dark", NULL, "Dark colour theme.", 0},
-    {"thoughts", NULL, "Show the model's reasoning as a collapsible Thinking block above the answer.", 0},
-    {"stats", NULL, "Status bar shows prompt / generated tokens, speed and context use while generating.", 0},
-    {"fade", NULL, "Streamed text fades in instead of appearing at once.", 0},
-    {"smartpaste", NULL, "Pasting more than 2000 characters into the input adds them as an attachment (pasted-text.txt) instead of filling the box.", 0},
+    {"#", "Context & compression", NULL, 0},
+    {"ctxlimit", "Context limit", "Context size in tokens that compression and fitting work with. 0 = the server's n_ctx (from /props). Set it lower to compress earlier.", 0},
+    {"autocompact", NULL, "When the conversation nears the context limit: first old tool results are shortened (instant), and only if that is not enough the model summarizes the older messages. The originals stay in the previous branch (<).", 0},
+    {"compactpct", "Compress at %", "Start compressing when the prompt reaches this % of the context limit (30-95). 0 = auto: keeps max(15%, 4096 tokens) free for the reply.", 0},
+    {"precompact", NULL, "After a reply, when the context is above 85% of the compression point, compress while you read instead of when you send. Sending a message that still fits cancels it.", 0},
+    {"sumbud", "Summary budget", "Most tokens a reasoning model may think before writing the compression summary (reasoning_budget_tokens; needs a recent llama-server). Makes compression much faster. 0 = no limit.", 0},
+    {"budget", NULL, "If a request would not fit, old tool results are shortened, large ones clipped and, as a last resort, early messages left out of that request - instead of a server error. Nothing is deleted from the chat.", 0},
+    {"kvslot", NULL, "Saves the server's KV cache when you switch chats and restores it when you come back, so a long chat is not processed again (seconds instead of minutes). Start llama-server with --slot-save-path <folder>. Uses slot 0.", 0},
+    {"kvdir", "KV slot folder", "Optional: the server's --slot-save-path folder when llama-server runs on this PC, e.g. llama-server\\slot-save (relative = the folder of llamac.exe). Then a chat's file is checked before restoring, deleted with the chat, and old files are removed above the limit. Only llamac-*.bin files are deleted.", 0},
+    {"kvmax", "KV folder limit (GB)", "Most space the saved KV caches (llamac-*.bin) may use in the KV slot folder; the oldest are deleted first. A 27B model needs about 0.5-1 GB per chat. 0 = no limit.", 0},
     {NULL, NULL, NULL, 0}};
 static const SItem SLAY_R[] = {
     {"#", "Sampling  -  empty = server value", NULL, 0},
@@ -226,6 +297,7 @@ static const SItem SLAY_R[] = {
     {"dry", "DRY mult.", "DRY multiplier: penalizes repeating whole sequences. 0 = off.", 1},
     {"maxtok", NULL, "Most tokens generated per reply. Empty, 0 or negative = not sent (server value applies).", 1},
     {"seed", NULL, "Random seed for repeatable output. Empty or negative = not sent (random).", 1},
+    {"rbud", "Think budget", "Reasoning budget: most tokens a reasoning model may think per reply (reasoning_budget_tokens, needs a recent llama-server). Empty = not sent.", 1},
     {"#", "Tools & memory", NULL, 0},
     {"tools", "Enable tools (files, memory, MCP)", "Lets the model call tools: file tools (need a root folder), memory and MCP servers. Read-only tools run without asking.", 0},
     {"fsroot", "Root folder", "File tools work only inside this folder. Empty = no file tools.", 0},
@@ -233,12 +305,16 @@ static const SItem SLAY_R[] = {
     {"shell", NULL, "Adds run_command: runs cmd.exe commands starting in the root folder. A command can reach anything your Windows account can.", 0},
     {"autoappr", NULL, "Runs every tool call without asking, including writes, deletes and shell commands.", 0},
     {"toolmax", "Max tool rounds", "How many tool-call rounds the model may do for one message before it is stopped. Empty or 0 = 10.", 0},
-    {"mem", NULL, "Saved facts about you are added to the system prompt. With tools on, the model can save and search them (memory_save / memory_search).", 0},
+    {"mem", NULL, "Saved facts about you are added to the system prompt - the ones that match the chat's first message first. With tools on, the model can save and search them (memory_save / memory_search).", 0},
+    {"verify", "Verify command", "Run after every tool round that changed files, e.g. build.bat or npm test (cmd.exe, in the root folder, 5 min limit). Its result is added to the tool result, so the model sees build errors at once. Runs without asking: it is your own command.", 0},
     {"!mcp", NULL, NULL, 0},
-    {"#", "Context & compression", NULL, 0},
-    {"ctxlimit", "Context limit", "Context size in tokens that compression works with. 0 = the server's n_ctx (from /props). Set it lower to compress earlier. It does not change the server or trim requests.", 0},
-    {"autocompact", NULL, "When the conversation nears the context limit, the model summarizes the older messages into one summary message. The originals stay in the previous branch (<).", 0},
-    {"compactpct", "Compress at %", "Start compressing when the prompt reaches this % of the context limit (30-95). 0 = auto: keeps max(15%, 4096 tokens) free for the reply.", 0},
+    {"#", "Display", NULL, 0},
+    {"dark", NULL, "Dark colour theme.", 0},
+    {"thoughts", NULL, "Show the model's reasoning as a collapsible Thinking block above the answer.", 0},
+    {"stats", NULL, "Status bar shows prompt / generated tokens, speed and context use while generating.", 0},
+    {"fade", NULL, "Streamed text fades in instead of appearing at once.", 0},
+    {"smartpaste", NULL, "Pasting more than 2000 characters into the input adds them as an attachment (pasted-text.txt) instead of filling the box.", 0},
+    {"logprobs", NULL, "Shades words the model was unsure about; click one to see what else it considered and continue the answer from another choice. llama-server allows this only in requests without tools: set Tool set to None (e.g. in a profile).", 0},
     {NULL, NULL, NULL, 0}};
 static const SItem *const SLAYOUT[2] = {SLAY_L, SLAY_R};
 static HWND setHdr[12];
@@ -330,6 +406,11 @@ static LRESULT CALLBACK SetProc(HWND h, UINT m, WPARAM w, LPARAM l)
                     continue;
                 if (f->kind == 3)
                     *(int *)((char *)&G + f->off) = (SendMessageW(setCtl[i], BM_GETCHECK, 0, 0) == BST_CHECKED);
+                else if (!strcmp(f->key, "toolset"))
+                {
+                    int s = (int)SendMessageW(setCtl[i], CB_GETCURSEL, 0, 0);
+                    G.toolset = s < 0 ? 0 : s;
+                }
                 else
                 {
                     char *t = get_text(setCtl[i]);
@@ -518,6 +599,16 @@ static void show_settings(void)
                     SendMessageW(setCtl[fi], EM_SETLIMITTEXT, (WPARAM)(sizeof G.sys - 1), 0);
                     SendMessageW(setCtl[fi], EM_SETCUEBANNER, TRUE, (LPARAM)L"Instructions sent to the model at the start of every chat");
                     y += sysRow + sysExtra;
+                }
+                else if (!strcmp(f->key, "toolset"))
+                {
+                    setCtl[fi] = CreateWindowExW(0, L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWNLIST,
+                                                 x + lw, y, w - lw - 10, 200, hSet, (HMENU)(INT_PTR)IDC_TOOLSET, NULL, NULL);
+                    SetWindowTheme(setCtl[fi], G.dark ? L"DarkMode_CFD" : L"CFD", NULL);
+                    SendMessageW(setCtl[fi], CB_ADDSTRING, 0, (LPARAM)L"All tools");
+                    SendMessageW(setCtl[fi], CB_ADDSTRING, 0, (LPARAM)L"Chat: date, memory, guides, MCP");
+                    SendMessageW(setCtl[fi], CB_ADDSTRING, 0, (LPARAM)L"None");
+                    SendMessageW(setCtl[fi], CB_SETCURSEL, (WPARAM)G.toolset, 0);
                 }
                 else
                     setCtl[fi] = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", wv, WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL, x + lw, y, w - lw - 10, 24, hSet, NULL, NULL, NULL);

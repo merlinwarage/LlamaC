@@ -108,6 +108,8 @@ static void conv_json(SB *s, Conv *c)
             sb_json(s, m->tcid ? m->tcid : "");
             sb_puts(s, ",\"toolName\":");
             sb_json(s, m->tname ? m->tname : "");
+            if (m->elided)
+                sb_puts(s, ",\"llamacElided\":1");
         }
         sb_putc(s, '}');
     }
@@ -170,6 +172,7 @@ static Conv *conv_from_json(J *o, int newid)
         if ((s = j_str(j_get(e, "toolName"))) != NULL)
             setstr(&nd->tname, s);
         nd->ts = (long long)j_num(j_get(e, "timestamp"), (double)nd->ts);
+        nd->elided = j_num(j_get(e, "llamacElided"), 0) != 0;
         pids[idx] = j_str(j_get(e, "parent"));
         if (isroot && c->root < 0)
             c->root = idx;

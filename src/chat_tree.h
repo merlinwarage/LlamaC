@@ -22,6 +22,14 @@ typedef struct
     int kind;
     char *name, *data, *mime;
 } Att;
+/* one uncertain token of an assistant answer (memory only, not saved): byte range in `content`, its probability
+   and the alternatives the model considered, "token\x1Fprob\x1E..." */
+typedef struct
+{
+    int off, len;
+    float p;
+    char *alts;
+} TokInfo;
 typedef struct
 {
     char id[40];
@@ -34,6 +42,10 @@ typedef struct
     int think_open;
     char *tcalls;       /* assistant: OpenAI tool_calls array as JSON text (NULL = none) */
     char *tcid, *tname; /* tool result: tool_call_id and tool name */
+    int elided;         /* tool result: replaced by a short stub in requests (context saving); saved */
+    TokInfo *tk;        /* assistant: uncertain tokens (Token confidence setting), memory only */
+    int ntk, captk;
+    int trunc;          /* assistant: generation stopped at max_tokens (memory only) */
 } Node;
 typedef struct
 {
@@ -114,6 +126,9 @@ static void conv_free(Conv *c)
         free(n->tcalls);
         free(n->tcid);
         free(n->tname);
+        for (int k = 0; k < n->ntk; k++)
+            free(n->tk[k].alts);
+        free(n->tk);
         for (int k = 0; k < n->na; k++)
         {
             free(n->att[k].name);
@@ -125,6 +140,36 @@ static void conv_free(Conv *c)
     free(c->n);
     free(c->name);
     free(c);
+}
+static void tk_clear(Node *n)
+{
+    for (int k = 0; k < n->ntk; k++)
+        free(n->tk[k].alts);
+    n->ntk = 0;
+}
+static void tk_add(Node *n, int off, int len, float p, const char *alts)
+{
+    if (n->ntk == n->captk)
+    {
+        n->captk = n->captk ? n->captk * 2 : 64;
+        n->tk = (TokInfo *)realloc(n->tk, (size_t)n->captk * sizeof(TokInfo));
+    }
+    n->tk[n->ntk].off = off;
+    n->tk[n->ntk].len = len;
+    n->tk[n->ntk].p = p;
+    n->tk[n->ntk].alts = xstrdup(alts ? alts : "");
+    n->ntk++;
+}
+static void kid_remove(Conv *c, int parent, int i)
+{
+    Node *p = &c->n[parent];
+    for (int k = 0; k < p->nk; k++)
+        if (p->kids[k] == i)
+        {
+            memmove(&p->kids[k], &p->kids[k + 1], (size_t)(p->nk - k - 1) * sizeof(int));
+            p->nk--;
+            return;
+        }
 }
 static int deepest(Conv *c, int i)
 {

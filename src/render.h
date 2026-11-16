@@ -348,6 +348,80 @@ static void render_content(const char *s)
             p++;
     }
 }
+/* ---------- token confidence ----------
+   Uncertain tokens (from logprobs) are shaded: the less likely, the stronger. The answer is rendered as markdown,
+   so token byte offsets do not map to screen positions directly; each token is searched in the rendered text,
+   in order, within the distance its byte offset allows. Tokens that cannot be placed are skipped. */
+static int tok_skip(const char *s, int n)
+{
+    for (int i = 0; i < n; i++)
+        if (!strchr(" \t\r\n*_`#|>~-", s[i]))
+            return 0;
+    return 1; /* whitespace or markdown syntax: not visible as such */
+}
+static COLORREF blend(COLORREF a, COLORREF b, int pct)
+{
+    return RGB(GetRValue(a) + (GetRValue(b) - GetRValue(a)) * pct / 100, GetGValue(a) + (GetGValue(b) - GetGValue(a)) * pct / 100,
+               GetBValue(a) + (GetBValue(b) - GetBValue(a)) * pct / 100);
+}
+static void shade_tokens(int node, LONG a, LONG b)
+{
+    Node *m = &cur->n[node];
+    TEXTRANGEW tr;
+    wchar_t *txt;
+    LONG len = b - a, pos = 0;
+    int prev_end = 0;
+    CHARFORMAT2W cf;
+    if (!m->ntk || len <= 0)
+        return;
+    txt = (wchar_t *)malloc(((size_t)len + 1) * sizeof(wchar_t));
+    tr.chrg.cpMin = a;
+    tr.chrg.cpMax = b;
+    tr.lpstrText = txt;
+    len = (LONG)SendMessageW(hChat, EM_GETTEXTRANGE, 0, (LPARAM)&tr);
+    memset(&cf, 0, sizeof cf);
+    cf.cbSize = sizeof cf;
+    cf.dwMask = CFM_BACKCOLOR;
+    for (int i = 0; i < m->ntk; i++)
+    {
+        TokInfo *t = &m->tk[i];
+        const char *s;
+        int n, wn;
+        wchar_t w[64];
+        LONG lim, hit = -1;
+        if (t->p >= 0.5f || t->off + t->len > (int)strlen(m->content))
+            continue;
+        s = m->content + t->off;
+        n = t->len;
+        while (n && (*s == ' ' || *s == '\t' || *s == '\n' || *s == '\r'))
+            s++, n--;
+        while (n && (s[n - 1] == ' ' || s[n - 1] == '\t' || s[n - 1] == '\n' || s[n - 1] == '\r'))
+            n--;
+        if (n <= 0 || tok_skip(s, n))
+            continue;
+        wn = MultiByteToWideChar(CP_UTF8, 0, s, n, w, 63);
+        if (wn <= 0)
+            continue;
+        lim = pos + (t->off - prev_end) + wn + 8; /* rendered text is never longer than the source */
+        if (lim > len)
+            lim = len;
+        for (LONG k = pos; k + wn <= lim; k++)
+            if (!wmemcmp(txt + k, w, (size_t)wn))
+            {
+                hit = k;
+                break;
+            }
+        if (hit < 0)
+            continue;
+        cf.crBackColor = blend(cBg, RGB(245, 158, 11), t->p < 0.2f ? 45 : 13); /* < 20%: strong, 20-50%: faint */
+        SendMessageW(hChat, EM_SETSEL, (WPARAM)(a + hit), (LPARAM)(a + hit + wn));
+        SendMessageW(hChat, EM_SETCHARFORMAT, SCF_SELECTION, (LPARAM)&cf);
+        link_insert(a + hit, a + hit + wn, node, 4, i);
+        pos = hit + wn;
+        prev_end = t->off + t->len;
+    }
+    free(txt);
+}
 /* ---------- tool calls and tool results ---------- */
 static const char *role_label(int r) { return r == ROLE_USER ? "You" : r == ROLE_ASSIST ? "Assistant"
                                                                    : r == ROLE_TOOL     ? "Tool"
@@ -356,7 +430,8 @@ static void render_tool_result(Node *m)
 {
     char h[200];
     size_t full = strlen(m->content), n = full;
-    snprintf(h, sizeof h, "\xE2\x96\xB8 %.150s\n", m->tname && *m->tname ? m->tname : "tool");
+    snprintf(h, sizeof h, "\xE2\x96\xB8 %.150s%s\n", m->tname && *m->tname ? m->tname : "tool",
+             m->elided ? "   (shortened in requests to save context)" : "");
     re_add(h, strlen(h), cDim, CFE_BOLD, FACE);
     if (n > 4000)
     {
@@ -462,7 +537,10 @@ static void render_node(const int *p, int i, int n)
         render_tool_result(m);
     else
     {
+        LONG ca = re_len();
         render_content(m->content);
+        if (m->ntk && !(busy && cur == genConv && p[i] == genNode))
+            shade_tokens(p[i], ca, re_len());
         if (m->tcalls && *m->tcalls)
             render_tool_calls(m->tcalls);
     }

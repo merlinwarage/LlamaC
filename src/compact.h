@@ -1,4 +1,9 @@
-/* compact.h - automatic session compression when free context is low */
+/* compact.h - automatic session compression when free context is low
+   Tier 1 (instant, no model call): old tool results - before the latest user message - are replaced by short stubs
+   in requests (Node.elided). Tier 2 (only if tier 1 was not enough): the model summarizes the older part of the
+   conversation. Both run once at the trigger point, so llama-server's prompt cache is invalidated once, not on
+   every turn. With "Prepare compression early" the work starts while the user is idle, a bit before the limit;
+   such an early summary is cancelled when the user sends a message that still fits. */
 #ifndef LLAMAC_COMPACT_H
 #define LLAMAC_COMPACT_H
 
@@ -16,6 +21,8 @@ typedef struct
 #define CRETRY 6
 static Conv *g_clast_conv;
 static int g_clast_n, g_clast_fail;
+/* g_compact_early (the running summary was started early) and g_ccancel are declared in actions.h */
+static volatile HINTERNET g_creq; /* the summary request, closed to cancel it */
 static void compact_clip(SB *o, const char *s, size_t cap)
 {
     size_t n = strlen(s), h, t, ts;
@@ -44,7 +51,7 @@ static void compact_transcript(SB *o, Conv *c, const int *ids, int k, size_t cap
             continue;
         sb_puts(o, m->role == ROLE_SYS ? "earlier summary" : role_name(m->role));
         sb_puts(o, ": ");
-        compact_clip(o, m->content, cap);
+        compact_clip(o, m->content, m->role == ROLE_TOOL && m->elided ? 400 : cap);
         sb_putc(o, '\n');
         if (m->tcalls && *m->tcalls)
         {
@@ -63,26 +70,68 @@ static void compact_transcript(SB *o, Conv *c, const int *ids, int k, size_t cap
             }
     }
 }
-/* one-shot non-streaming summary request; returns the summary text, or NULL with the reason in err */
+/* Tier 1: stub the tool results that come before the latest user message. Returns the characters saved. */
+static size_t compact_elide(Conv *c)
+{
+    int *p, n = conv_path(c, &p), lastu = -1;
+    size_t saved = 0;
+    for (int i = 0; i < n; i++)
+        if (c->n[p[i]].role == ROLE_USER)
+            lastu = i;
+    for (int i = 0; i < lastu; i++)
+    {
+        Node *m = &c->n[p[i]];
+        size_t L = strlen(m->content);
+        if (m->role == ROLE_TOOL && !m->elided && L >= 600)
+        {
+            m->elided = 1;
+            saved += L - 250;
+        }
+    }
+    free(p);
+    if (saved)
+        c->dirty = 1;
+    return saved;
+}
+static const char *SUMMARY_PROMPT =
+    "You compress a conversation so it can continue in a fresh context. Write a summary with exactly these sections:\n"
+    "## Goal\nWhat the user wants overall.\n"
+    "## Current state\nWhat is done, what is in progress, the latest results.\n"
+    "## Decisions and constraints\nChoices made, requirements, preferences, things to avoid.\n"
+    "## Facts and identifiers\nFile paths, names, commands, numbers, versions, error messages - exact.\n"
+    "## Open questions and next steps\n"
+    "If the transcript starts with an earlier summary, merge it in and keep its facts. Dense and factual, under 600 words, "
+    "bullet points, no commentary, do not invent anything.";
+/* one-shot streaming summary request (streaming: closing it stops generation on the server, and it can report
+   progress); returns the summary text, or NULL with the reason in err */
 static char *compact_summarize(const char *transcript, char *err, size_t es)
 {
-    SB body = {0};
-    char *raw, *out = NULL;
-    J *r, *ch, *msg;
+    SB body = {0}, content = {0}, buf = {0};
+    Url u;
+    HINTERNET ses = NULL, con = NULL, req = NULL;
+    wchar_t *hd = NULL;
+    DWORD status = 0, sz = sizeof status, got, last = GetTickCount();
+    char tmp[8192], *out = NULL;
+    long ntok = 0, nreason = 0;
+    char fin[32] = "";
+    err[0] = 0;
     sb_puts(&body, "{\"messages\":[{\"role\":\"system\",\"content\":");
-    sb_json(&body, "Summarize this conversation for continuity. Keep the user's goal, decisions, file paths, names, constraints, open questions and current state. Dense and factual, under 600 words. No commentary.");
+    sb_json(&body, SUMMARY_PROMPT);
     sb_puts(&body, "},{\"role\":\"user\",\"content\":");
     {
-        SB u = {0};
-        sb_puts(&u, "--- CONVERSATION ---\n");
-        sb_puts(&u, transcript);
-        sb_json(&body, sbs(&u));
-        free(u.p);
+        SB t = {0};
+        sb_puts(&t, "--- CONVERSATION ---\n");
+        sb_puts(&t, transcript);
+        sb_puts(&t, "\n--- END ---\nWrite the summary now.");
+        sb_json(&body, sbs(&t));
+        free(t.p);
     }
-    /* Reasoning models think before the summary: measured ~2100 reasoning + ~700 summary tokens for an
-       8k-token transcript (Qwen3 27B), so the budget must cover both. Thinking is not forced off: some
-       models answer enable_thinking:false with an empty reply. The user's template kwargs apply instead. */
-    sb_puts(&body, "}],\"stream\":false,\"max_tokens\":6144,\"temperature\":0.2");
+    /* Reasoning models think before the summary: measured ~2100 reasoning + ~700 summary tokens for an 8k-token
+       transcript (Qwen3 27B). A reasoning budget (llama-server reasoning_budget_tokens) caps the thinking; thinking
+       is not forced off, since some models answer enable_thinking:false with an empty reply. */
+    sb_puts(&body, "}],\"stream\":true,\"max_tokens\":6144,\"temperature\":0.2");
+    if (G.sumbud > 0)
+        sb_printf(&body, ",\"reasoning_budget_tokens\":%d", G.sumbud);
     if (G.kwargs[0])
     {
         J *k = json_parse_strict(G.kwargs);
@@ -96,36 +145,122 @@ static char *compact_summarize(const char *transcript, char *err, size_t es)
         sb_json(&body, G.model);
     }
     sb_putc(&body, '}');
-    raw = http_req_x(L"POST", "/v1/chat/completions", sbs(&body), 900000, err, es); /* local models can be slow: 6k tokens at ~18 t/s is ~6 min */
-    free(body.p);
-    if (!raw)
-        return NULL;
-    r = json_parse(raw);
-    free(raw);
-    ch = j_get(r, "choices");
-    msg = j_get(j_idx(ch, 0), "message");
+    if (!url_parse(G.url, "/v1/chat/completions", &u))
     {
-        const char *s = j_str(j_get(msg, "content"));
-        const char *fr = j_str(j_get(j_idx(ch, 0), "finish_reason"));
-        const char *rc = j_str(j_get(msg, "reasoning_content"));
-        if (s)
-        { /* reasoning_format "none": the thinking arrives inline */
-            const char *e = strstr(s, "</think>");
-            if (e)
-                s = e + 8;
-            while (*s && isspace((unsigned char)*s))
-                s++;
-        }
-        if (s && *s)
-            out = xstrdup(s);
-        else if (!r || !msg)
-            snprintf(err, es, "unexpected reply from the server");
-        else if (rc && *rc)
-            snprintf(err, es, "the model used its whole token budget on reasoning (finish_reason %s)", fr ? fr : "?");
-        else
-            snprintf(err, es, "the model returned an empty summary (finish_reason %s)", fr ? fr : "?");
+        snprintf(err, es, "invalid server URL");
+        free(body.p);
+        return NULL;
     }
-    j_free(r);
+    ses = WinHttpOpen(L"llamac/1.0", WINHTTP_ACCESS_TYPE_NO_PROXY, NULL, NULL, 0);
+    if (ses)
+    {
+        WinHttpSetTimeouts(ses, 5000, 5000, 30000, 900000); /* a slow model can think for minutes before the first summary token */
+        con = WinHttpConnect(ses, u.host, u.port, 0);
+    }
+    if (con)
+        req = WinHttpOpenRequest(con, L"POST", u.path, NULL, NULL, NULL, u.secure ? WINHTTP_FLAG_SECURE : 0);
+    if (!req)
+    {
+        snprintf(err, es, "cannot connect to %s", G.url);
+        goto done;
+    }
+    InterlockedExchangePointer((PVOID volatile *)&g_creq, req);
+    if (g_ccancel)
+        goto done;
+    hd = auth_headers(G.key, 1);
+    if (!WinHttpSendRequest(req, hd, (DWORD)-1, body.p, (DWORD)body.n, (DWORD)body.n, 0) || !WinHttpReceiveResponse(req, NULL))
+    {
+        if (!g_ccancel)
+            snprintf(err, es, GetLastError() == ERROR_WINHTTP_TIMEOUT ? "no reply in time (timeout)" : "cannot connect to %s (server not running?)", G.url);
+        goto done;
+    }
+    WinHttpQueryHeaders(req, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, NULL, &status, &sz, NULL);
+    while (WinHttpReadData(req, tmp, sizeof tmp, &got) && got)
+    {
+        char *start, *nl;
+        sb_add(&buf, tmp, got);
+        if (status != 200)
+            continue;
+        start = buf.p;
+        while ((nl = (char *)memchr(start, '\n', (size_t)(buf.p + buf.n - start))) != NULL)
+        {
+            char *ln = start;
+            *nl = 0;
+            start = nl + 1;
+            while (*ln == ' ')
+                ln++;
+            if (strncmp(ln, "data:", 5))
+                continue;
+            ln += 5;
+            while (*ln == ' ')
+                ln++;
+            {
+                J *r = json_parse(ln), *ch = j_idx(j_get(r, "choices"), 0), *d = j_get(ch, "delta");
+                const char *c = j_str(j_get(d, "content")), *rc = j_str(j_get(d, "reasoning_content")), *fr = j_str(j_get(ch, "finish_reason"));
+                const char *em = j_str(j_get(j_get(r, "error"), "message"));
+                if (em)
+                    snprintf(err, es, "%.300s", em);
+                if (c && *c)
+                    sb_puts(&content, c), ntok++;
+                if (rc && *rc)
+                    nreason++;
+                if (fr)
+                    snprintf(fin, sizeof fin, "%s", fr);
+                j_free(r);
+            }
+        }
+        {
+            size_t rest = (size_t)(buf.p + buf.n - start);
+            memmove(buf.p, start, rest);
+            buf.n = rest;
+            buf.p[rest] = 0;
+        }
+        if (GetTickCount() - last > 1500)
+        {
+            char st[200];
+            last = GetTickCount();
+            snprintf(st, sizeof st, "Compressing older messages: %ld thinking + %ld summary tokens so far ...", nreason, ntok);
+            post_msg(9, st);
+        }
+    }
+    if (status != 200 && !g_ccancel)
+    {
+        J *r = json_parse(sbs(&buf));
+        const char *m = j_str(j_get(j_get(r, "error"), "message"));
+        snprintf(err, es, "HTTP %lu: %.300s", (unsigned long)status, m ? m : sbs(&buf));
+        j_free(r);
+    }
+done:
+    {
+        HINTERNET h = (HINTERNET)InterlockedExchangePointer((PVOID volatile *)&g_creq, NULL);
+        if (h)
+            WinHttpCloseHandle(h);
+    }
+    if (con)
+        WinHttpCloseHandle(con);
+    if (ses)
+        WinHttpCloseHandle(ses);
+    free(hd);
+    free(body.p);
+    free(buf.p);
+    if (g_ccancel)
+    {
+        snprintf(err, es, "cancelled");
+        free(content.p);
+        return NULL;
+    }
+    {
+        const char *s = sbs(&content), *e = strstr(s, "</think>"); /* reasoning_format "none": inline thinking */
+        if (e)
+            s = e + 8;
+        while (*s && isspace((unsigned char)*s))
+            s++;
+        if (*s)
+            out = xstrdup(s);
+        else if (!err[0])
+            snprintf(err, es, nreason ? "the model used its whole token budget on reasoning (finish_reason %s)" : "the model returned an empty summary (finish_reason %s)", fin[0] ? fin : "?");
+    }
+    free(content.p);
     return out;
 }
 static DWORD WINAPI compact_worker(LPVOID arg)
@@ -152,7 +287,18 @@ static DWORD WINAPI compact_worker(LPVOID arg)
     free(j);
     return 0;
 }
-static void compact_start(Conv *c)
+/* Stop, or a message sent while an early summary runs: close the request (the server stops generating) */
+static void compact_cancel(void)
+{
+    HINTERNET h;
+    if (!g_compacting)
+        return;
+    InterlockedExchange(&g_ccancel, 1);
+    h = (HINTERNET)InterlockedExchangePointer((PVOID volatile *)&g_creq, NULL);
+    if (h)
+        WinHttpCloseHandle(h);
+}
+static void compact_start(Conv *c, int early)
 {
     CJob *j;
     HANDLE h;
@@ -181,8 +327,8 @@ static void compact_start(Conv *c)
         free(p);
         return;
     }
-    /* keep the request well inside the server context (~3 chars per token, half the window) */
-    limit = (G.ctx_limit > 0 ? (size_t)G.ctx_limit : (size_t)g_nctx) * 3 / 2;
+    /* keep the request well inside the server context (half the window) */
+    limit = (size_t)((G.ctx_limit > 0 ? G.ctx_limit : g_nctx) * g_cpt / 2);
     compact_transcript(&t, c, p, k, 6000);
     if (t.n > limit)
     {
@@ -205,7 +351,10 @@ static void compact_start(Conv *c)
     j->txt = t.p ? t.p : xstrdup("");
     free(p);
     g_compacting = 1;
-    set_status("Context is low - compressing older messages (can take a few minutes with reasoning models) ...");
+    g_compact_early = early;
+    InterlockedExchange(&g_ccancel, 0);
+    set_status(early ? "Preparing context compression while idle (sending a message cancels it) ..."
+                     : "Compressing older messages to free context ...");
     h = CreateThread(NULL, 0, compact_worker, j, 0, NULL);
     if (h)
         CloseHandle(h);
@@ -215,6 +364,30 @@ static void compact_start(Conv *c)
         free(j->txt);
         free(j);
     }
+}
+/* The context passed `threshold` tokens (est = estimated prompt size): tier 1 first; tier 2 only if the
+   estimate is still above it. Returns 1 when a summary was started. */
+static int compact_maybe(Conv *c, int est, int threshold, int early)
+{
+    size_t saved;
+    if (g_compacting || !G.autocompact)
+        return 0;
+    saved = compact_elide(c);
+    if (saved)
+    {
+        int tok = (int)(saved / g_cpt);
+        char st[200];
+        est -= tok;
+        if (c == g_meas_conv && g_last_prompt_n > tok)
+            g_last_prompt_n -= tok; /* keep est_tokens() in line with what the next request will send */
+        snprintf(st, sizeof st, "Context: old tool results shortened (about %d tokens saved).", tok);
+        set_status(st);
+        save_all();
+    }
+    if (est <= threshold)
+        return 0;
+    compact_start(c, early);
+    return g_compacting;
 }
 
 #endif /* LLAMAC_COMPACT_H */

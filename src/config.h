@@ -16,6 +16,17 @@ typedef struct
     int compact_pct;                         /* compress at this % of the context, 0 = auto */
     int shell;                               /* 1 = offer the run_command tool (runs commands as the user) */
     int fade;                                /* 1 = fade-in animation for streamed text */
+    char remind[1024];                       /* appended to the latest user message at send time (not stored) */
+    char verify[512];                        /* command run after a tool round that changed files */
+    char rbud[24];                           /* reasoning budget override (reasoning_budget_tokens), empty = not sent */
+    int toolset;                             /* 0 all tools, 1 chat tools only (date, memory, guides, MCP), 2 none */
+    int kvslot;                              /* 1 = save/restore the server KV cache per chat (--slot-save-path) */
+    int logprobs;                            /* 1 = request token probabilities (only possible without tools) */
+    int precompact;                          /* 1 = prepare compression while idle, before the limit is reached */
+    int budget;                              /* 1 = fit each request into the context (elide / clip old tool output) */
+    int sumbud;                              /* reasoning budget for the compression summary, 0 = not sent */
+    char kvdir[512];                         /* the server's --slot-save-path as seen from here (relative = exe folder) */
+    int kvmax;                               /* GB the llamac-*.bin files in kvdir may use, 0 = no limit */
 } Cfg;
 /* kind: 0 text, 1 number override (string, empty = server default), 2 integer, 3 checkbox */
 typedef struct
@@ -61,6 +72,17 @@ static const Field FIELDS[] = {
     FLD("ctxlimit", "Context limit (tokens, 0 = server)", 2, ctx_limit, NULL, NULL), /* int: kind 1 would write text into it */
     FLD("autocompact", "Auto-compress when context is low", 3, autocompact, NULL, NULL),
     FLD("compactpct", "Compress at % of context (0 = auto)", 2, compact_pct, NULL, NULL),
+    FLD("rbud", "Reasoning budget", 1, rbud, "reasoning_budget_tokens", NULL),
+    FLD("remind", "Reminder", 0, remind, NULL, NULL),
+    FLD("verify", "Verify command", 0, verify, NULL, NULL),
+    FLD("toolset", "Tool set", 2, toolset, NULL, NULL),
+    FLD("kvslot", "Keep KV cache per chat (server needs --slot-save-path)", 3, kvslot, NULL, NULL),
+    FLD("logprobs", "Token confidence shading (only without tools)", 3, logprobs, NULL, NULL),
+    FLD("precompact", "Prepare compression early, while idle", 3, precompact, NULL, NULL),
+    FLD("budget", "Fit requests into the context", 3, budget, NULL, NULL),
+    FLD("sumbud", "Summary reasoning budget (tokens, 0 = none)", 2, sumbud, NULL, NULL),
+    FLD("kvdir", "KV slot folder", 0, kvdir, NULL, NULL),
+    FLD("kvmax", "KV folder limit (GB)", 2, kvmax, NULL, NULL),
 };
 #define NFIELDS ((int)(sizeof FIELDS / sizeof FIELDS[0]))
 static int fidx(const char *key)
@@ -85,6 +107,10 @@ static void cfg_defaults(Cfg *g)
     g->mem_on = 1;
     g->ctx_limit = 0;
     g->autocompact = 1;
+    g->precompact = 1;
+    g->budget = 1;
+    g->sumbud = 1024;
+    g->kvmax = 10;
 }
 /* default_generation_settings.params from GET /props -> out[NFIELDS] ("" = unknown) */
 static void srv_parse(J *props, char out[][32])
@@ -183,6 +209,12 @@ static void cfg_parse(Cfg *g, char *txt)
         g->ctx_limit = 0;
     if (g->compact_pct < 0)
         g->compact_pct = 0;
+    if (g->toolset < 0 || g->toolset > 2)
+        g->toolset = 0;
+    if (g->sumbud < 0)
+        g->sumbud = 0;
+    if (g->kvmax < 0)
+        g->kvmax = 0;
 }
 
 #endif /* LLAMAC_CONFIG_H */

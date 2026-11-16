@@ -3,6 +3,7 @@
 #define LLAMAC_WIN_BASE_H
 
 #define WIN32_LEAN_AND_MEAN
+#define COBJMACROS /* C-style COM calls (WIC, used to paste clipboard images as PNG) */
 #ifndef UNICODE
 #define UNICODE
 #endif
@@ -21,8 +22,12 @@
 #include <dwmapi.h>
 #include <uxtheme.h>
 #include <mmsystem.h>
+#include <objbase.h>
+#include <wincodec.h>
 
 #pragma comment(lib, "winmm.lib")
+#pragma comment(lib, "windowscodecs.lib")
+#pragma comment(lib, "uuid.lib")
 #pragma comment(lib, "winhttp.lib")
 #pragma comment(lib, "comdlg32.lib")
 #pragma comment(lib, "user32.lib")
@@ -72,7 +77,11 @@ enum
     IDC_MCPRELOAD,
     IDC_SYSLIST,
     IDC_SYSSAVE,
-    IDC_SYSDEL
+    IDC_SYSDEL,
+    IDC_EDITREPLY,
+    IDC_QUEUE,
+    IDC_CONTEXT,
+    IDC_TOOLSET
 };
 #define WM_APP_MSG (WM_APP + 1)
 #define WM_APP_INIT (WM_APP + 2)

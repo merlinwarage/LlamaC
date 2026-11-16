@@ -37,6 +37,100 @@ static void pend_add(int kind, const char *name, const char *data, const char *m
     a->mime = xstrdup(mime);
     pend_status();
 }
+/* clipboard bitmap -> PNG (WIC) -> data URL; NULL on failure. The PNG is much smaller than the raw bitmap. */
+static char *clip_image_png(void)
+{
+    HBITMAP hb;
+    IWICImagingFactory *fac = NULL;
+    IWICBitmap *bmp = NULL;
+    IWICBitmapEncoder *enc = NULL;
+    IWICBitmapFrameEncode *frm = NULL;
+    IPropertyBag2 *props = NULL;
+    IStream *st = NULL;
+    char *out = NULL;
+    HRESULT hc = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
+    if (!OpenClipboard(hMain))
+        goto end;
+    hb = (HBITMAP)GetClipboardData(CF_BITMAP); /* Windows converts CF_DIB / CF_DIBV5 to this */
+    if (hb && SUCCEEDED(CoCreateInstance(&CLSID_WICImagingFactory, NULL, CLSCTX_INPROC_SERVER, &IID_IWICImagingFactory, (void **)&fac)) &&
+        SUCCEEDED(IWICImagingFactory_CreateBitmapFromHBITMAP(fac, hb, NULL, WICBitmapIgnoreAlpha, &bmp)) &&
+        SUCCEEDED(CreateStreamOnHGlobal(NULL, TRUE, &st)) &&
+        SUCCEEDED(IWICImagingFactory_CreateEncoder(fac, &GUID_ContainerFormatPng, NULL, &enc)) &&
+        SUCCEEDED(IWICBitmapEncoder_Initialize(enc, st, WICBitmapEncoderNoCache)) &&
+        SUCCEEDED(IWICBitmapEncoder_CreateNewFrame(enc, &frm, &props)) &&
+        SUCCEEDED(IWICBitmapFrameEncode_Initialize(frm, props)) &&
+        SUCCEEDED(IWICBitmapFrameEncode_WriteSource(frm, (IWICBitmapSource *)bmp, NULL)) &&
+        SUCCEEDED(IWICBitmapFrameEncode_Commit(frm)) && SUCCEEDED(IWICBitmapEncoder_Commit(enc)))
+    {
+        HGLOBAL g;
+        STATSTG ss;
+        if (SUCCEEDED(IStream_Stat(st, &ss, STATFLAG_NONAME)) && SUCCEEDED(GetHGlobalFromStream(st, &g)))
+        {
+            const unsigned char *d = (const unsigned char *)GlobalLock(g);
+            if (d)
+            {
+                char *e = b64(d, (size_t)ss.cbSize.QuadPart);
+                SB u = {0};
+                sb_puts(&u, "data:image/png;base64,");
+                sb_puts(&u, e);
+                free(e);
+                out = u.p;
+                GlobalUnlock(g);
+            }
+        }
+    }
+    CloseClipboard();
+end:
+    if (props)
+        IPropertyBag2_Release(props);
+    if (frm)
+        IWICBitmapFrameEncode_Release(frm);
+    if (enc)
+        IWICBitmapEncoder_Release(enc);
+    if (st)
+        IStream_Release(st);
+    if (bmp)
+        IWICBitmap_Release(bmp);
+    if (fac)
+        IWICImagingFactory_Release(fac);
+    if (SUCCEEDED(hc))
+        CoUninitialize();
+    return out;
+}
+static void add_file(const wchar_t *path);
+/* Ctrl+V in the input box: files copied in Explorer and screenshots become attachments. 1 = handled. */
+static int paste_special(void)
+{
+    if (IsClipboardFormatAvailable(CF_HDROP) && OpenClipboard(hMain))
+    {
+        HDROP d = (HDROP)GetClipboardData(CF_HDROP);
+        UINT n = d ? DragQueryFileW(d, 0xFFFFFFFF, NULL, 0) : 0;
+        wchar_t (*files)[MAX_PATH] = n ? (wchar_t (*)[MAX_PATH])calloc(n, sizeof *files) : NULL;
+        for (UINT i = 0; i < n; i++)
+            DragQueryFileW(d, i, files[i], MAX_PATH);
+        CloseClipboard(); /* add_file may show a status; do not hold the clipboard */
+        for (UINT i = 0; i < n; i++)
+            add_file(files[i]);
+        free(files);
+        return n > 0;
+    }
+    if (!IsClipboardFormatAvailable(CF_UNICODETEXT) && (IsClipboardFormatAvailable(CF_BITMAP) || IsClipboardFormatAvailable(CF_DIB)))
+    {
+        char *png = clip_image_png();
+        if (png)
+        {
+            char name[48];
+            static int cnt;
+            snprintf(name, sizeof name, "pasted-image-%d.png", ++cnt);
+            pend_add(ATT_IMAGE, name, png, "image/png");
+            free(png);
+        }
+        else
+            set_status("Could not convert the clipboard image");
+        return 1;
+    }
+    return 0;
+}
 static void add_file(const wchar_t *path)
 {
     size_t len;

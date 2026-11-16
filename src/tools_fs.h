@@ -192,6 +192,7 @@ static char *fs_list(J *a)
     return s.p ? s.p : xstrdup("");
 }
 
+#define FS_READ_PAGE 400 /* lines returned when read_file gets no limit */
 static char *fs_read(J *a)
 {
     wchar_t p[MAX_PATH];
@@ -212,8 +213,15 @@ static char *fs_read(J *a)
     char *t = (char *)b;
     if (len >= 3 && b[0] == 0xEF && b[1] == 0xBB && b[2] == 0xBF)
         t += 3;
-    int off = (int)j_num(j_get(a, "offset"), 1), lim = (int)j_num(j_get(a, "limit"), 0);
+    int off = (int)j_num(j_get(a, "offset"), 1), lim = (int)j_num(j_get(a, "limit"), 0), total = 1, paged = 0;
     const char *st = t, *en;
+    for (const char *q = t; *q; q++)
+        total += *q == '\n';
+    if (lim <= 0 && total > FS_READ_PAGE)
+    { /* no range given: one page, so a big file does not flood the context of a small model */
+        lim = FS_READ_PAGE;
+        paged = 1;
+    }
     if (off > 1)
     {
         int ln = 1;
@@ -255,7 +263,8 @@ static char *fs_read(J *a)
     if (trunc)
         sb_puts(&s, "\n[truncated at 100000 characters; use offset/limit to read further]");
     else if (lim > 0 && *en)
-        sb_puts(&s, "\n[more lines follow; use offset/limit to read further]");
+        sb_printf(&s, "\n[%s lines %d-%d of %d; use offset/limit to read further]", paged ? "showing" : "read",
+                  off > 1 ? off : 1, (off > 1 ? off : 1) + lim - 1, total);
     free(b);
     return s.p ? s.p : xstrdup("(empty file)");
 }
@@ -461,6 +470,7 @@ static char *fs_write(J *a)
             fs_mkdirs(d);
         }
     }
+    cp_record(p);
     if (app)
     {
         HANDLE f = CreateFileW(p, FILE_APPEND_DATA, FILE_SHARE_READ, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
@@ -554,14 +564,57 @@ static char *fs_edit(J *a)
     }
     char *res = NULL;
     if (!cnt)
-    {
-        int hint = tx_first_line_hint((char *)b, oldt);
-        char m[420];
-        if (hint)
-            snprintf(m, sizeof m, "old_text was not found. Its first line does occur at line %d, so a later line differs (check whitespace, indentation and line endings). Read that region with read_file and copy the text exactly.", hint);
+    { /* small models often get indentation or trailing spaces wrong: retry ignoring whitespace */
+        int wcnt = 0, wline = 0;
+        char *nt = tx_ws_replace((char *)b, oldt, newt, all, &wcnt, &wline);
+        if (nt)
+        {
+            cp_record(p);
+            if (write_atomic(p, nt, strlen(nt)) || write_file(p, nt, strlen(nt)))
+            {
+                SB m = {0};
+                char *rel = fs_rel(p);
+                int added = 1;
+                for (const char *z = newt; *z; z++)
+                    added += *z == '\n';
+                if (added > 20)
+                    added = 20;
+                sb_printf(&m, "Replaced %d occurrence(s) in ", wcnt);
+                sb_puts(&m, rel);
+                sb_printf(&m, " (matched ignoring whitespace differences; indentation adjusted to the file). Result around line %d:\n", wline);
+                tx_snippet(&m, nt, wline - 2, wline + added + 1);
+                free(rel);
+                res = m.p;
+            }
+            else
+            {
+                char m[160];
+                snprintf(m, sizeof m, "could not write the file (Win32 error %lu)", (unsigned long)GetLastError());
+                res = fs_err(m);
+            }
+            free(nt);
+        }
+        else if (wcnt > 1)
+        {
+            char m[220];
+            snprintf(m, sizeof m, "old_text was not found exactly, and ignoring whitespace it matches %d places; add more surrounding context or set replace_all", wcnt);
+            res = fs_err(m);
+        }
         else
-            snprintf(m, sizeof m, "old_text was not found: not even its first line exists in the file. Re-read the file with read_file (or use grep) and copy the text exactly, including whitespace and indentation.");
-        res = fs_err(m);
+        {
+            int hint = tx_first_line_hint((char *)b, oldt);
+            SB m = {0};
+            if (hint)
+            {
+                sb_printf(&m, "old_text was not found. Its first line does occur at line %d, so a later line differs. The file currently has there:\n", hint);
+                tx_snippet(&m, (char *)b, hint, hint + 12);
+                sb_puts(&m, "Copy old_text from these lines exactly (without the line numbers).");
+            }
+            else
+                sb_puts(&m, "old_text was not found: not even its first line exists in the file. Re-read the file with read_file (or use grep) and copy the text exactly.");
+            res = fs_err(sbs(&m));
+            free(m.p);
+        }
     }
     else if (cnt > 1 && !all)
     {
@@ -586,6 +639,7 @@ static char *fs_edit(J *a)
                 break;
         }
         sb_puts(&o, q);
+        cp_record(p);
         if (write_atomic(p, sbs(&o), o.n) || write_file(p, sbs(&o), o.n))
         {
             SB m = {0};
@@ -876,6 +930,11 @@ static char *fs_move(J *a)
             fs_mkdirs(d);
         }
     }
+    if (fs_isfile(pf))
+    {
+        cp_record(pf);
+        cp_record(pt); /* did not exist: restoring deletes it */
+    }
     if (!MoveFileExW(pf, pt, MOVEFILE_COPY_ALLOWED))
     {
         char m[120];
@@ -894,6 +953,7 @@ static char *fs_delete(J *a)
         return fs_err(e);
     if (!fs_isfile(p))
         return fs_err("not a file (folders cannot be deleted with this tool)");
+    cp_record(p);
     if (!DeleteFileW(p))
     {
         char m[120];
@@ -916,11 +976,13 @@ static void fs_drain(HANDLE rd, SB *raw)
             sb_add(raw, buf, got);
     }
 }
-static char *fs_run(J *a)
+/* runs cmd.exe /c <cmd> in <cwdrel> (relative to the root). need_shell: the model's run_command (needs the
+   setting); 0 = the user's own verify command. Returns the exit code and the folded output. */
+static char *fs_run_cmd(const char *cmd, const char *cwdrel, int tmo, int need_shell)
 {
-    const char *cmd = j_str(j_get(a, "command")), *e;
+    const char *e;
     wchar_t cwd[MAX_PATH], sys[MAX_PATH], exe[MAX_PATH], *wc, *cl;
-    int tmo = (int)j_num(j_get(a, "timeout_seconds"), 60), timed_out = 0, cancelled = 0, utf8ok;
+    int timed_out = 0, cancelled = 0, utf8ok;
     SECURITY_ATTRIBUTES sa;
     HANDLE rd = NULL, wr = NULL, nul, job;
     STARTUPINFOW si;
@@ -929,13 +991,13 @@ static char *fs_run(J *a)
     DWORD t0, code = 0;
     size_t L;
     char *text;
-    if (!G.shell)
+    if (need_shell && !G.shell)
         return fs_err("the shell tool is disabled in Settings");
     if (!cmd || !*cmd)
         return fs_err("'command' is required");
     if (strlen(cmd) > 8000)
         return fs_err("command is too long");
-    if ((e = fs_resolve(j_str(j_get(a, "cwd")), cwd)) != NULL)
+    if ((e = fs_resolve(cwdrel, cwd)) != NULL)
         return fs_err(e);
     if (!fs_isdir(cwd))
         return fs_err("cwd is not a directory");
@@ -1050,6 +1112,11 @@ static char *fs_run(J *a)
     else if (cancelled)
         sb_puts(&res, "[killed: cancelled by the user]\n");
     sb_printf(&res, "exit code: %lu\n", (unsigned long)code);
+    { /* ANSI colours, progress redraws and repeated warnings cost tokens and say nothing new */
+        char *f = tx_fold(text);
+        free(text);
+        text = f;
+    }
     L = strlen(text);
     if (L > 52000)
     { /* build and test errors are at the end: keep the head and a long tail */
@@ -1064,6 +1131,94 @@ static char *fs_run(J *a)
         sb_puts(&res, text);
     free(text);
     return res.p;
+}
+static char *fs_run(J *a)
+{
+    return fs_run_cmd(j_str(j_get(a, "command")), j_str(j_get(a, "cwd")), (int)j_num(j_get(a, "timeout_seconds"), 60), 1);
+}
+
+/* ---------- approval preview: what a write tool would change, as a diff (NULL = nothing to show) ---------- */
+static char *fs_preview(const char *tool, J *a)
+{
+    const char *path = j_str(j_get(a, "path"));
+    wchar_t p[MAX_PATH];
+    size_t len = 0;
+    unsigned char *b = NULL;
+    char *d = NULL;
+    SB o = {0};
+    if (!path || fs_resolve(path, p))
+        return NULL;
+    if (fs_isfile(p))
+        b = read_file(p, &len);
+    if (b && fs_binary(b, len))
+    {
+        free(b);
+        return NULL;
+    }
+    if (!strcmp(tool, "edit_file"))
+    {
+        const char *oldt = j_str(j_get(a, "old_text")), *newt = j_str(j_get(a, "new_text"));
+        int all = j_get(a, "replace_all") && j_get(a, "replace_all")->num != 0, cnt = 0, line = 0;
+        if (b && oldt && newt && *oldt)
+        {
+            char *nt = NULL;
+            if (strstr((char *)b, oldt))
+            { /* exact: the same replacement fs_edit makes (first occurrence, or all) */
+                SB t = {0};
+                const char *q = (char *)b, *hit;
+                size_t ol = strlen(oldt);
+                while ((hit = strstr(q, oldt)) != NULL)
+                {
+                    sb_add(&t, q, (size_t)(hit - q));
+                    sb_puts(&t, newt);
+                    q = hit + ol;
+                    if (!all)
+                        break;
+                }
+                sb_puts(&t, q);
+                nt = t.p ? t.p : xstrdup("");
+            }
+            else
+                nt = tx_ws_replace((char *)b, oldt, newt, all, &cnt, &line);
+            if (nt)
+            {
+                d = tx_diff((char *)b, nt, 2500);
+                free(nt);
+            }
+        }
+        if (!d)
+            sb_puts(&o, "(old_text does not match the file as it is now; the tool will report an error)\n");
+    }
+    else if (!strcmp(tool, "write_file"))
+    {
+        const char *content = j_str(j_get(a, "content"));
+        int app = j_get(a, "append") && j_get(a, "append")->num != 0;
+        if (content)
+        {
+            SB t = {0};
+            if (!b)
+                sb_puts(&o, "New file.\n");
+            if (app && b)
+                sb_add(&t, (char *)b, len);
+            sb_puts(&t, content);
+            d = tx_diff(b ? (char *)b : "", sbs(&t), 2500);
+            free(t.p);
+        }
+    }
+    else if (!strcmp(tool, "delete_file") && b)
+    {
+        int lines = 1;
+        for (size_t i = 0; i < len; i++)
+            lines += b[i] == '\n';
+        sb_printf(&o, "Deletes the file (%d lines, %llu bytes). A checkpoint is kept: editing an earlier message can restore it.\n", lines, (unsigned long long)len);
+    }
+    if (d)
+    {
+        sb_puts(&o, d);
+        free(d);
+    }
+    free(b);
+    return o.p;
 }
 
 static char *fs_call(const char *tool, J *a)
@@ -1100,7 +1255,7 @@ static void fs_register(void)
         return;
     tool_add("list_directory", "List the files and folders in a directory inside the allowed root folder.",
              "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"description\":\"Directory relative to the root folder. Default: the root.\"}}}", 0, 0, "list_directory", 1, 0);
-    tool_add("read_file", "Read a text file inside the allowed root folder. Optionally read only a range of lines. Set line_numbers to get numbered lines (never copy the numbers into edit_file).",
+    tool_add("read_file", "Read a text file inside the allowed root folder. Without offset/limit it returns the first 400 lines and says how many the file has; read further parts with offset/limit. Set line_numbers to get numbered lines (never copy the numbers into edit_file).",
              "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"description\":\"File path relative to the root folder\"},\"offset\":{\"type\":\"integer\",\"description\":\"First line to read (1-based)\"},\"limit\":{\"type\":\"integer\",\"description\":\"Maximum number of lines\"},\"line_numbers\":{\"type\":\"boolean\",\"description\":\"Prefix every line with its line number\"}},\"required\":[\"path\"]}", 0, 0, "read_file", 1, 0);
     tool_add("search_files", "Find files by name pattern and optionally search their text for a string (case-insensitive). For regular expressions use grep.",
              "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"description\":\"Start directory relative to the root folder. Default: the root.\"},\"pattern\":{\"type\":\"string\",\"description\":\"File name wildcard, e.g. *.c or *.h;*.c. Default: *\"},\"query\":{\"type\":\"string\",\"description\":\"Text to look for inside files. Omit to just list matching files.\"},\"max_results\":{\"type\":\"integer\",\"description\":\"Default 100, max 500\"}}}", 0, 0, "search_files", 1, 0);

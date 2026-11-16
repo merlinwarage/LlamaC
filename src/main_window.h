@@ -3,14 +3,15 @@
 #define LLAMAC_MAIN_WINDOW_H
 
 /* ---------- main window ---------- */
+static RECT rcGauge;    /* context gauge right of the status line (click: context window) */
+static int g_gauge_last = -1;
 static LRESULT CALLBACK InputProc(HWND h, UINT m, WPARAM w, LPARAM l)
 {
     if (m == WM_CHAR)
     {
         if (w == L'\r' && !(GetKeyState(VK_SHIFT) & 0x8000))
-        {
-            if (!busy)
-                PostMessageW(hMain, WM_COMMAND, IDC_SEND, 0);
+        { /* while the model is busy, Enter queues the message instead of stopping */
+            PostMessageW(hMain, WM_COMMAND, busy ? IDC_QUEUE : IDC_SEND, 0);
             return 0;
         }
         if (w == 1)
@@ -24,6 +25,8 @@ static LRESULT CALLBACK InputProc(HWND h, UINT m, WPARAM w, LPARAM l)
         SendMessageW(hMain, WM_DROPFILES, w, l);
         return 0;
     }
+    if (m == WM_PASTE && paste_special())
+        return 0; /* copied files or an image became attachments */
     if (m == WM_PASTE && G.smartpaste && OpenClipboard(h))
     {
         HANDLE g = GetClipboardData(CF_UNICODETEXT);
@@ -94,10 +97,10 @@ static void layout(void)
         SendMessageW(hChat, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, MAKELONG(m, m));
     }
     {
-        const int ids[] = {IDC_REGEN, IDC_EDIT, IDC_DELM, IDC_PREV, IDC_NEXT, IDC_COPY, IDC_DELC};
-        const int wd[] = {100, 92, 100, 36, 36, 62, 100};
+        const int ids[] = {IDC_REGEN, IDC_EDIT, IDC_EDITREPLY, IDC_DELM, IDC_PREV, IDC_NEXT, IDC_COPY, IDC_DELC};
+        const int wd[] = {96, 84, 88, 92, 36, 36, 56, 92};
         int x = left;
-        for (int i = 0; i < 7; i++)
+        for (int i = 0; i < 8; i++)
         {
             MoveWindow(B(ids[i]), x, yAct + 2, wd[i], 32, TRUE);
             x += wd[i] + 4;
@@ -107,8 +110,44 @@ static void layout(void)
     MoveWindow(B(IDC_ATTACH), left + 10, yBox + (boxH - 38) / 2, 38, 38, TRUE);
     MoveWindow(hInput, left + 60, yBox + 14, cw - 60 - 100, boxH - 28, TRUE);
     MoveWindow(B(IDC_SEND), left + cw - 88, yBox + (boxH - 38) / 2, 78, 38, TRUE);
-    MoveWindow(hStatus, left, yStatus, cw, 20, TRUE);
+    MoveWindow(hStatus, left, yStatus, cw - 186, 20, TRUE);
+    SetRect(&rcGauge, left + cw - 176, yStatus + 1, left + cw, yStatus + 19);
     RedrawWindow(hMain, NULL, NULL, RDW_INVALIDATE | RDW_ERASE);
+}
+/* how full the context is: measured tokens of the last request (plus anything added since) / context size */
+static void paint_gauge(HDC dc)
+{
+    int lim = ctx_lim(), used = (cur && cur == g_meas_conv) ? est_tokens(cur) : -1;
+    RECT r = rcGauge, f;
+    wchar_t t[64];
+    COLORREF col = cAccent;
+    if (used < 0 && cur && cur == g_meas_conv)
+        used = g_gauge_last; /* between the start of a request and its first timings */
+    if (cur == g_meas_conv && used >= 0)
+        g_gauge_last = used;
+    FillRect(dc, &rcGauge, hbrBg);
+    rrect(dc, &r, 8, cSurf, cBorder);
+    if (lim > 0 && used >= 0)
+    {
+        int trig = ctx_trigger(lim), w = (int)((long long)(r.right - r.left - 4) * (used > lim ? lim : used) / lim);
+        if (used > trig)
+            col = cErr;
+        else if (used > trig * 85 / 100)
+            col = RGB(245, 158, 11);
+        f = r;
+        InflateRect(&f, -2, -2);
+        f.right = f.left + w;
+        if (w > 0)
+            rrect(dc, &f, 6, col, col);
+        _snwprintf(t, 64, L"ctx %d.%dk / %dk", used / 1000, used % 1000 / 100, lim / 1000);
+    }
+    else
+        _snwprintf(t, 64, lim > 0 ? L"ctx ? / %dk" : L"ctx ?", lim / 1000);
+    t[63] = 0;
+    SelectObject(dc, hFont);
+    SetTextColor(dc, cFg);
+    SetBkMode(dc, TRANSPARENT);
+    DrawTextW(dc, t, -1, &r, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 }
 static void paint_main(HWND h)
 {
@@ -154,6 +193,7 @@ static void paint_main(HWND h)
         free(w);
     }
     rrect(dc, &rcBox, 26, cSurf, cBorder);
+    paint_gauge(dc);
     EndPaint(h, &ps);
 }
 static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l)
@@ -195,6 +235,7 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l)
         mkbtn(h, L"\u21BB", IDC_REFRESH);
         mkbtn(h, L"Regenerate", IDC_REGEN);
         mkbtn(h, L"Edit last", IDC_EDIT);
+        mkbtn(h, L"Edit reply", IDC_EDITREPLY);
         mkbtn(h, L"Delete msg", IDC_DELM);
         mkbtn(h, L"\u25C0", IDC_PREV);
         mkbtn(h, L"\u25B6", IDC_NEXT);
@@ -246,8 +287,27 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l)
     case WM_PAINT:
         paint_main(h);
         return 0;
+    case WM_LBUTTONUP:
+    {
+        POINT pt = {GET_X_LPARAM(l), GET_Y_LPARAM(l)};
+        if (PtInRect(&rcGauge, pt))
+            act_context();
+        return 0;
+    }
+    case WM_SETCURSOR:
+    {
+        POINT pt;
+        GetCursorPos(&pt);
+        ScreenToClient(h, &pt);
+        if ((HWND)w == h && PtInRect(&rcGauge, pt))
+        {
+            SetCursor(LoadCursorW(NULL, IDC_HAND));
+            return TRUE;
+        }
+        break;
+    }
     case WM_GETMINMAXINFO:
-        ((MINMAXINFO *)l)->ptMinTrackSize.x = 940;
+        ((MINMAXINFO *)l)->ptMinTrackSize.x = 1000;
         ((MINMAXINFO *)l)->ptMinTrackSize.y = 560;
         return 0;
     case WM_MEASUREITEM:
@@ -400,6 +460,15 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l)
         case IDC_EDIT:
             act_edit();
             break;
+        case IDC_EDITREPLY:
+            act_edit_reply();
+            break;
+        case IDC_QUEUE:
+            act_queue();
+            break;
+        case IDC_CONTEXT:
+            act_context();
+            break;
         case IDC_DELM:
             act_delmsg();
             break;
@@ -453,13 +522,45 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l)
         }
         else
         {
-            if (g->kind != 2)
-                flush_stream(); /* stats arrive with every token; they must not force a flush */
+            if (g->kind != 2 && g->kind < 11)
+                flush_stream(); /* stats, token info and progress arrive while streaming; they must not force a flush */
             if (g->kind == 2)
             {
                 if (G.stats)
                     set_status(g->text);
+                InvalidateRect(hMain, &rcGauge, FALSE);
             }
+            else if (g->kind == 11)
+            { /* uncertain token of the answer: "off\tlen\tp\talternatives" */
+                if (genConv && genNode < genConv->cnt)
+                {
+                    char *a = g->text, *b = strchr(a, '\t'), *c = b ? strchr(b + 1, '\t') : NULL, *d = c ? strchr(c + 1, '\t') : NULL;
+                    int off = atoi(a), len = d ? atoi(b + 1) : 0;
+                    if (d && off >= 0 && len >= 0 && (size_t)off + (size_t)len <= strlen(genConv->n[genNode].content))
+                        tk_add(&genConv->n[genNode], off, len, (float)atof(c + 1), d + 1);
+                }
+            }
+            else if (g->kind == 12)
+            { /* prompt processing progress: "processed\ttotal\tcache\tms" */
+                int pr = 0, tot = 0, ca = 0, ms = 0;
+                char st[200];
+                sscanf(g->text, "%d\t%d\t%d\t%d", &pr, &tot, &ca, &ms);
+                if (tot > 0 && pr < tot)
+                {
+                    snprintf(st, sizeof st, "Reading the prompt: %d%%  (%d of %d tokens, %d from cache)%s", (int)((long long)pr * 100 / tot), pr, tot, ca,
+                             tot - ca > 2000 ? "  -  a long prompt takes a while" : "");
+                    set_status(st);
+                }
+            }
+            else if (g->kind == 13)
+            {
+                if (genConv && genNode < genConv->cnt)
+                    genConv->n[genNode].trunc = 1;
+            }
+            else if (g->kind == 14)
+                kv_mark(g->text); /* this chat's KV cache is now saved on the server */
+            else if (g->kind == 15)
+                kv_forget(g->text); /* its saved KV cache could not be restored */
             else if (g->kind == 3)
             {
                 char b[700];
@@ -480,6 +581,8 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l)
                 {
                     Node *n = &genConv->n[genNode];
                     int maxr = atoi(G.toolmax);
+                    if (!g_stop)
+                        ms_note_gen(g_last_prompt_n, g_job_chars, n->trunc);
                     if (maxr <= 0)
                         maxr = 10;
                     if (n->tcalls && *n->tcalls)
@@ -499,10 +602,18 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l)
                             cont = 1;
                     }
 
-                    int lim = G.ctx_limit > 0 ? G.ctx_limit : g_nctx;
-                    if (G.autocompact && lim > 0 && !g_stop &&
-                        g_last_prompt_n + g_last_pred_n > ctx_trigger(lim))
-                        compact_start(genConv);
+                    {
+                        int lim = ctx_lim(), used = g_last_prompt_n + g_last_pred_n;
+                        if (G.autocompact && lim > 0 && !g_stop)
+                        {
+                            int trig = ctx_trigger(lim);
+                            if (used > trig)
+                                compact_maybe(genConv, used, trig, 0);
+                            else if (!cont && G.precompact && used > trig * 85 / 100)
+                                compact_maybe(genConv, used, trig * 85 / 100, 1); /* idle now: prepare early */
+                        }
+                    }
+                    g_cpt = ms_cpt();
 
                     if (!cont && !n->content[0] && !n->reasoning[0])
                     {
@@ -522,15 +633,43 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l)
                     genConv->mod = now_ms();
                 if (cont)
                 {
+                    int lim = ctx_lim();
+                    size_t cap = 60000;
                     g_toolround++;
                     set_status("Running tools...");
-                    tool_run_start(genConv->n[genNode].tcalls);
+                    if (lim > 0)
+                    { /* each result may use at most ~40% of the free context, shared between the calls */
+                        long long fr = (long long)lim - g_last_prompt_n - g_last_pred_n - reply_reserve(&G, lim);
+                        int nc = tc_count(genConv->n[genNode].tcalls);
+                        cap = fr > 0 ? (size_t)(fr * 0.4 * g_cpt / (nc > 0 ? nc : 1)) : 4000;
+                    }
+                    tool_run_start(genConv->n[genNode].tcalls, cap, genConv->id);
                 } /* stays busy until the tools finish */
                 else
                     set_busy(0);
                 refresh_list();
                 render_all();
                 save_all();
+                ms_save();
+                if (!cont && genConv && genNode < genConv->cnt && genConv->n[genNode].trunc && !g_stop)
+                    set_status("The reply was cut at Max tokens. Edit reply -> Continue from here lets the model go on.");
+                if (!busy)
+                {
+                    if (g_stop && g_queue_text)
+                    { /* stopped: the queued message goes back to the input box */
+                        wchar_t *qw = w_from(g_queue_text);
+                        SetWindowTextW(hInput, qw);
+                        free(qw);
+                        for (int i = 0; i < g_queue_natt && npend < 16; i++)
+                            pend[npend++] = g_queue_att[i];
+                        g_queue_natt = 0;
+                        free(g_queue_text);
+                        g_queue_text = NULL;
+                    }
+                    else
+                        queue_flush();
+                }
+                InvalidateRect(hMain, &rcGauge, FALSE);
             }
             else if (g->kind == 5)
             { /* tool_calls of the assistant message just streamed */
@@ -566,6 +705,17 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l)
                     refresh_list();
                     render_all();
                     save_all();
+                    if (g_queue_text)
+                    { /* stopped: the queued message goes back to the input box */
+                        wchar_t *qw = w_from(g_queue_text);
+                        SetWindowTextW(hInput, qw);
+                        free(qw);
+                        for (int i = 0; i < g_queue_natt && npend < 16; i++)
+                            pend[npend++] = g_queue_att[i];
+                        g_queue_natt = 0;
+                        free(g_queue_text);
+                        g_queue_text = NULL;
+                    }
                 }
                 else
                 {
@@ -578,6 +728,35 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l)
             else if (g->kind == 9)
             {
                 set_status(g->text);
+            }
+            else if (g->kind == 10 && !strcmp(g->text, "!cancelled"))
+            { /* Stop, or the user's message went first: not a failure, may run again later */
+                g_compacting = 0;
+                g_clast_fail = 0;
+                set_status(g_compact_early ? "Early compression cancelled: your message went first." : "Compression cancelled.");
+                if (g_wait_gen)
+                { /* cancelled while a generation waited for it: send with the uncompressed chat (fitting keeps it inside the context) */
+                    int alive = 0;
+                    g_wait_gen = 0;
+                    for (int i = 0; i < nconv; i++)
+                        if (convs[i] == g_wait_conv)
+                            alive = 1;
+                    if (alive && g_wait_parent < g_wait_conv->cnt && busy)
+                    {
+                        char *pf = g_wait_prefill;
+                        g_wait_prefill = NULL;
+                        if (cur != g_wait_conv)
+                            select_conv(g_wait_conv);
+                        start_gen_px(g_wait_parent, g_wait_cont, pf);
+                        free(pf);
+                    }
+                    else
+                        set_busy(0);
+                }
+                queue_flush();
+                free(g->text);
+                free(g);
+                return 0;
             }
             else if (g->kind == 10)
             {
@@ -653,13 +832,18 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l)
                             alive = 1;
                     if (alive && g_wait_parent < g_wait_conv->cnt)
                     {
+                        char *pf = g_wait_prefill;
+                        g_wait_prefill = NULL;
                         if (cur != g_wait_conv)
                             select_conv(g_wait_conv);
-                        start_gen_ex(g_wait_parent, g_wait_cont);
+                        start_gen_px(g_wait_parent, g_wait_cont, pf);
+                        free(pf);
                     }
                     else
                         set_busy(0);
                 }
+                queue_flush();
+                InvalidateRect(hMain, &rcGauge, FALSE);
                 free(g->text);
                 free(g);
                 return 0;
@@ -699,8 +883,10 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l)
     case WM_CLOSE:
         if (busy)
             stop_gen();
+        compact_cancel();
         save_all();
         cfg_save();
+        ms_save();
         DestroyWindow(h);
         return 0;
     case WM_ENDSESSION:

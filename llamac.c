@@ -2,7 +2,7 @@
  * llamac.c - native Win32 / pure C client for llama-server (llama.cpp WebUI clone)
  * Build (x64 Native Tools Command Prompt for VS 2022):   build.bat   (or: cl /O2 /W3 /utf-8 llamac.c)
  */
-#define LLAMAC_VERSION L"2.2.0"
+#define LLAMAC_VERSION L"2.3.0"
 #define _CRT_SECURE_NO_WARNINGS
 #include <stdio.h>
 #include <stdlib.h>
@@ -32,6 +32,8 @@
 #include "src/markdown.h"
 #include "src/render.h"
 #include "src/storage.h"
+#include "src/checkpoint.h" /* file checkpoints for rewinding a chat */
+#include "src/modelstats.h" /* per-model statistics and token calibration */
 #include "src/conv_list.h"
 #include "src/attachments.h"
 #include "src/http.h"
@@ -41,6 +43,7 @@
 #include "src/tools.h" /* tool registry, approval dialog, runner thread */
 #include "src/memory.h"
 #include "src/compact.h"
+#include "src/ctxview.h" /* context breakdown window */
 #include "src/mcp.h"
 #include "src/mcp_stdio.h"
 #include "src/mcp_http.h"
