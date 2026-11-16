@@ -595,7 +595,7 @@ static void render_all(void)
             re_pt = 20;
             re_nl();
             re_nl();
-            re_add("  llama.cpp\n", strlen("  llama.cpp\n"), cAccent, CFE_BOLD, FACE);
+            re_add(" LlamaC\n", strlen("  LlamaC\n"), cAccent, CFE_BOLD, FACE);
             re_pt = 11;
             re_add("  Ask anything. Drop images or text files to attach them.\n", strlen("  Ask anything. Drop images or text files to attach them.\n"), cDim, 0, FACE);
             re_pt = sv;

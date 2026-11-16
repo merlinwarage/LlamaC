@@ -46,6 +46,13 @@ static void select_conv(Conv *c)
     refresh_list();
     render_all();
 }
+/* the speed / token line and the gauge described the previous chat: clear them (not while a reply streams) */
+static void stats_reset(void)
+{
+    if (!busy)
+        set_status("");
+    InvalidateRect(hMain, &rcGauge, FALSE);
+}
 static void new_chat(void)
 {
     if (busy)
@@ -53,6 +60,7 @@ static void new_chat(void)
     Conv *c = conv_new();
     convs_add(c);
     select_conv(c);
+    stats_reset();
     SetFocus(hInput);
 }
 

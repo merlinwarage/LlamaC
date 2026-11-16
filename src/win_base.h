@@ -24,6 +24,7 @@
 #include <mmsystem.h>
 #include <objbase.h>
 #include <wincodec.h>
+#include <shobjidl.h> /* folder picker (IFileOpenDialog) in Settings */
 
 #pragma comment(lib, "winmm.lib")
 #pragma comment(lib, "windowscodecs.lib")
@@ -81,7 +82,9 @@ enum
     IDC_EDITREPLY,
     IDC_QUEUE,
     IDC_CONTEXT,
-    IDC_TOOLSET
+    IDC_TOOLSET,
+    IDC_BROWSE_FS,
+    IDC_BROWSE_KV
 };
 #define WM_APP_MSG (WM_APP + 1)
 #define WM_APP_INIT (WM_APP + 2)
@@ -115,6 +118,7 @@ static int genNode, genPhase;
 static wchar_t dataDir[MAX_PATH];
 static int sbVisible = 1, g_colw = 800;
 static RECT rcSide, rcSearch, rcHead, rcBox, rcTitle;
+static RECT rcGauge; /* context gauge right of the status line (click: context window) */
 static WNDPROC oldInput;
 static const wchar_t *FACE = L"Segoe UI", *MONO = L"Consolas";
 static int g_nctx; /* context window from /props, 0 = unknown */

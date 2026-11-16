@@ -3,7 +3,6 @@
 #define LLAMAC_MAIN_WINDOW_H
 
 /* ---------- main window ---------- */
-static RECT rcGauge;    /* context gauge right of the status line (click: context window) */
 static int g_gauge_last = -1;
 static LRESULT CALLBACK InputProc(HWND h, UINT m, WPARAM w, LPARAM l)
 {
@@ -121,6 +120,8 @@ static void paint_gauge(HDC dc)
     RECT r = rcGauge, f;
     wchar_t t[64];
     COLORREF col = cAccent;
+    if (cur && cur->leaf == cur->root && !(busy && cur == genConv))
+        used = 0; /* empty chat */
     if (used < 0 && cur && cur == g_meas_conv)
         used = g_gauge_last; /* between the start of a request and its first timings */
     if (cur == g_meas_conv && used >= 0)
@@ -164,7 +165,7 @@ static void paint_main(HWND h)
         SelectObject(dc, hFontT);
         SetTextColor(dc, cFg);
         RECT t = {18, 16, rcSide.right - 10, 50};
-        DrawTextW(dc, L"llama.cpp", -1, &t, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        DrawTextW(dc, L"LlamaC", -1, &t, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
         SelectObject(dc, hFont);
         SetTextColor(dc, cAccent);
         RECT t2 = {124, 22, rcSide.right - 10, 50};
@@ -254,7 +255,7 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l)
         PostMessageW(h, WM_APP_INIT, 0, 0);
         {
             wchar_t t[MAX_PATH + 40];
-            _snwprintf(t, MAX_PATH + 40, L"llama.cpp  -  data: %ls", dataDir);
+            _snwprintf(t, MAX_PATH + 40, L"LlamaC  -  data: %ls", dataDir);
             SetWindowTextW(h, t);
         }
         return 0;
@@ -396,6 +397,7 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l)
             {
                 cur = convs[lmap[s]];
                 render_all();
+                stats_reset();
             }
             return 0;
         }
@@ -783,7 +785,7 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l)
                                 int t = keep;
                                 while (tc->n[t].parent >= 0 && tc->n[t].parent != tc->root)
                                     t = tc->n[t].parent;
-                                const char *orig = tc->n[t].role == ROLE_SYS ? tc->n[t].reasoning
+                                const char *orig = tc->n[t].role == ROLE_SYS    ? tc->n[t].reasoning
                                                    : tc->n[t].role == ROLE_USER ? tc->n[t].content
                                                                                 : "";
                                 SB o = {0};
@@ -922,7 +924,7 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE hp, PWSTR cl, int show)
     wc.lpszClassName = L"LlamaC";
     wc.hIcon = LoadIconW(NULL, IDI_APPLICATION);
     RegisterClassExW(&wc);
-    HWND w = CreateWindowExW(0, L"LlamaC", L"llama.cpp", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, CW_USEDEFAULT, CW_USEDEFAULT, 1280, 820, NULL, NULL, hi, NULL);
+    HWND w = CreateWindowExW(0, L"LlamaC", L"LlamaC", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, CW_USEDEFAULT, CW_USEDEFAULT, 1280, 820, NULL, NULL, hi, NULL);
     if (!w)
         return 1;
     ACCEL ac[] = {

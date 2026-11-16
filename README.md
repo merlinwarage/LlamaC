@@ -73,7 +73,7 @@ Turn everything on or off with **Enable tools** in Settings. The model must supp
 | `delete_file`      | Delete one file                               | yes        |
 | `run_command`      | Run a `cmd.exe` command, return its output    | yes        |
 
-- The tools are limited to the **Root folder** set in Settings. Paths are resolved to their real location, so links and junctions cannot escape the root. With no root folder there are no file tools.
+- The tools are limited to the **Root folder** set in Settings (type it or pick it with **...**). Paths are resolved to their real location, so links and junctions cannot escape the root. With no root folder there are no file tools.
 - Write, move and delete tools only exist when **Allow file write / edit tools** is ticked.
 - `run_command` only exists when **Allow shell command tool** is ticked. It starts in the root folder, but the command itself can reach anything your Windows account can. It is not sandboxed.
 - `read_file` without `offset`/`limit` returns the first 400 lines and says how many the file has.
@@ -173,7 +173,7 @@ Small (9B-35B) models lose track of instructions in long contexts, choose wrong 
 
 With **Keep KV cache per chat**, llamac saves the server's KV cache (slot 0) under the chat's id when you switch to another chat, and restores it when you come back. A long chat then does not have to be processed again. Measured with a 27B Qwen model: going back to a 7.3k-token chat took 0.6 s to restore and 3.6 s to answer, instead of about 10 s of prompt processing. This needs `llama-server --slot-save-path <folder>`, and requests are then pinned to slot 0. Only chats saved before are restored (their ids are listed in `data\kvslots.txt`).
 
-The saved files are large: with that model 0.5-1 GB per chat, even for a short chat. llama-server has no API to delete them. When llama-server runs on the same PC, set **KV slot folder** to its `--slot-save-path` (a relative path is taken from the folder of `llamac.exe`, e.g. `llama-server\slot-save`). llamac then checks that a chat's file exists before restoring it, deletes the file together with the chat, and deletes the oldest files when they use more than **KV folder limit** (default 10 GB). Only files named `llamac-*.bin` are deleted.
+The saved files are large: with that model 0.5-1 GB per chat, even for a short chat. llama-server has no API to delete them. When llama-server runs on the same PC, set **KV slot folder** to its `--slot-save-path`: a full path, or one relative to the folder of `llamac.exe` such as `llama-server\slot-save`. The **...** button opens a folder picker, and quotes from Explorer's "Copy as path" are removed. llamac then checks that a chat's file exists before restoring it, deletes the file together with the chat, and deletes the oldest files when they use more than **KV folder limit** (default 10 GB). Only files named `llamac-*.bin` are deleted.
 
 Recent llama-server builds also keep a prompt cache in RAM across chats. While a chat is still in that cache it is reused even without this option. The saved files help when a chat has dropped out of it, and after a server restart.
 

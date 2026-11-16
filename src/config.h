@@ -165,6 +165,19 @@ static void unesc_to(char *dst, size_t cap, const char *s)
     }
     dst[n] = 0;
 }
+/* folder paths: drop surrounding blanks and quotes (Explorer's "Copy as path" adds quotes) */
+static void path_clean(char *s)
+{
+    size_t n;
+    char *a = s;
+    while (*a == ' ' || *a == '\t' || *a == '"')
+        a++;
+    n = strlen(a);
+    while (n && (a[n - 1] == ' ' || a[n - 1] == '\t' || a[n - 1] == '"'))
+        n--;
+    memmove(s, a, n);
+    s[n] = 0;
+}
 static void field_set(Cfg *g, const Field *f, const char *v)
 {
     char *base = (char *)g + f->off;
@@ -215,6 +228,8 @@ static void cfg_parse(Cfg *g, char *txt)
         g->sumbud = 0;
     if (g->kvmax < 0)
         g->kvmax = 0;
+    path_clean(g->fsroot);
+    path_clean(g->kvdir);
 }
 
 #endif /* LLAMAC_CONFIG_H */

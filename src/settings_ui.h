@@ -255,6 +255,47 @@ static void sysp_on_delete(HWND h)
     sysp_fill_combo("");
 }
 
+/* Windows folder dialog; path is the start folder on entry and the choice on return. 1 = chosen. */
+static int pick_folder(HWND owner, const wchar_t *title, wchar_t *path, size_t cap)
+{
+    IFileOpenDialog *d = NULL;
+    IShellItem *it = NULL;
+    int ok = 0;
+    HRESULT hc = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
+    if (SUCCEEDED(CoCreateInstance(&CLSID_FileOpenDialog, NULL, CLSCTX_INPROC_SERVER, &IID_IFileOpenDialog, (void **)&d)))
+    {
+        DWORD o = 0;
+        IFileOpenDialog_GetOptions(d, &o);
+        IFileOpenDialog_SetOptions(d, o | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST);
+        IFileOpenDialog_SetTitle(d, title);
+        if (path[0])
+        {
+            IShellItem *f = NULL;
+            if (SUCCEEDED(SHCreateItemFromParsingName(path, NULL, &IID_IShellItem, (void **)&f)))
+            {
+                IFileOpenDialog_SetFolder(d, f);
+                IShellItem_Release(f);
+            }
+        }
+        if (SUCCEEDED(IFileOpenDialog_Show(d, owner)) && SUCCEEDED(IFileOpenDialog_GetResult(d, &it)))
+        {
+            PWSTR s = NULL;
+            if (SUCCEEDED(IShellItem_GetDisplayName(it, SIGDN_FILESYSPATH, &s)))
+            {
+                wcsncpy(path, s, cap - 1);
+                path[cap - 1] = 0;
+                CoTaskMemFree(s);
+                ok = 1;
+            }
+            IShellItem_Release(it);
+        }
+        IFileOpenDialog_Release(d);
+    }
+    if (SUCCEEDED(hc))
+        CoUninitialize();
+    return ok;
+}
+
 /* ---------- dialog layout: two columns of sections; '#' = section header, '!mcp' = MCP buttons,
    half = two fields side by side. Fields not listed here are not shown. ---------- */
 typedef struct
@@ -282,7 +323,7 @@ static const SItem SLAY_L[] = {
     {"sumbud", "Summary budget", "Most tokens a reasoning model may think before writing the compression summary (reasoning_budget_tokens; needs a recent llama-server). Makes compression much faster. 0 = no limit.", 0},
     {"budget", NULL, "If a request would not fit, old tool results are shortened, large ones clipped and, as a last resort, early messages left out of that request - instead of a server error. Nothing is deleted from the chat.", 0},
     {"kvslot", NULL, "Saves the server's KV cache when you switch chats and restores it when you come back, so a long chat is not processed again (seconds instead of minutes). Start llama-server with --slot-save-path <folder>. Uses slot 0.", 0},
-    {"kvdir", "KV slot folder", "Optional: the server's --slot-save-path folder when llama-server runs on this PC, e.g. llama-server\\slot-save (relative = the folder of llamac.exe). Then a chat's file is checked before restoring, deleted with the chat, and old files are removed above the limit. Only llamac-*.bin files are deleted.", 0},
+    {"kvdir", "KV slot folder", "Optional: the server's --slot-save-path folder when llama-server runs on this PC: a full path such as I:\\AI\\llama-server\\slot-save, or one relative to the folder of llamac.exe such as llama-server\\slot-save. Then a chat's file is checked before restoring, deleted with the chat, and old files are removed above the limit. Only llamac-*.bin files are deleted.", 0},
     {"kvmax", "KV folder limit (GB)", "Most space the saved KV caches (llamac-*.bin) may use in the KV slot folder; the oldest are deleted first. A 27B model needs about 0.5-1 GB per chat. 0 = no limit.", 0},
     {NULL, NULL, NULL, 0}};
 static const SItem SLAY_R[] = {
@@ -367,7 +408,7 @@ static LRESULT CALLBACK SetProc(HWND h, UINT m, WPARAM w, LPARAM l)
     {
         DRAWITEMSTRUCT *d = (DRAWITEMSTRUCT *)l;
         UINT oid = d->CtlID;
-        if (oid == IDC_MCPEDIT || oid == IDC_MCPRELOAD || oid == IDC_SYSSAVE || oid == IDC_SYSDEL)
+        if (oid == IDC_MCPEDIT || oid == IDC_MCPRELOAD || oid == IDC_SYSSAVE || oid == IDC_SYSDEL || oid == IDC_BROWSE_FS || oid == IDC_BROWSE_KV)
             d->CtlID = IDC_RESET; /* same look as the Reset button */
         draw_btn(d);
         d->CtlID = oid;
@@ -383,6 +424,35 @@ static LRESULT CALLBACK SetProc(HWND h, UINT m, WPARAM w, LPARAM l)
             sysp_on_save(h);
         else if (LOWORD(w) == IDC_SYSDEL)
             sysp_on_delete(h);
+        else if (LOWORD(w) == IDC_BROWSE_FS || LOWORD(w) == IDC_BROWSE_KV)
+        {
+            int fi = fidx(LOWORD(w) == IDC_BROWSE_FS ? "fsroot" : "kvdir");
+            if (fi >= 0 && setCtl[fi])
+            {
+                char *cv = get_text(setCtl[fi]);
+                wchar_t path[MAX_PATH] = L"";
+                path_clean(cv);
+                if (*cv)
+                { /* start in the current folder; a relative one is taken from the exe folder */
+                    wchar_t *wc = w_from(cv), base[MAX_PATH], tmp[MAX_PATH * 2];
+                    if (PathIsRelativeW(wc))
+                    {
+                        GetModuleFileNameW(NULL, base, MAX_PATH);
+                        if (wcsrchr(base, L'\\'))
+                            *wcsrchr(base, L'\\') = 0;
+                        _snwprintf(tmp, MAX_PATH * 2, L"%ls\\%ls", base, wc);
+                        tmp[MAX_PATH * 2 - 1] = 0;
+                        GetFullPathNameW(tmp, MAX_PATH, path, NULL);
+                    }
+                    else
+                        GetFullPathNameW(wc, MAX_PATH, path, NULL);
+                    free(wc);
+                }
+                free(cv);
+                if (pick_folder(h, LOWORD(w) == IDC_BROWSE_FS ? L"Root folder for the file tools" : L"KV slot folder (llama-server --slot-save-path)", path, MAX_PATH))
+                    SetWindowTextW(setCtl[fi], path);
+            }
+        }
         else if (LOWORD(w) == IDC_MCPEDIT)
         {
             mcp_edit_config(h);
@@ -428,6 +498,8 @@ static LRESULT CALLBACK SetProc(HWND h, UINT m, WPARAM w, LPARAM l)
                 snprintf(G.sysname, sizeof G.sysname, "%s", nm);
                 free(nm);
             }
+            path_clean(G.fsroot);
+            path_clean(G.kvdir);
             cfg_save();
             tools_apply_settings();
             set_theme();
@@ -609,6 +681,15 @@ static void show_settings(void)
                     SendMessageW(setCtl[fi], CB_ADDSTRING, 0, (LPARAM)L"Chat: date, memory, guides, MCP");
                     SendMessageW(setCtl[fi], CB_ADDSTRING, 0, (LPARAM)L"None");
                     SendMessageW(setCtl[fi], CB_SETCURSEL, (WPARAM)G.toolset, 0);
+                }
+                else if (!strcmp(f->key, "fsroot") || !strcmp(f->key, "kvdir"))
+                { /* folder: edit box + "..." button that opens the folder picker */
+                    int bid = !strcmp(f->key, "fsroot") ? IDC_BROWSE_FS : IDC_BROWSE_KV;
+                    HWND bb;
+                    setCtl[fi] = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", wv, WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL, x + lw, y, w - lw - 10 - 40, 24, hSet, NULL, NULL, NULL);
+                    bb = mkbtn(hSet, L"...", bid);
+                    MoveWindow(bb, x + w - 10 - 36, y, 36, 24, FALSE);
+                    tip_add(tt, bb, "Choose the folder");
                 }
                 else
                     setCtl[fi] = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", wv, WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL, x + lw, y, w - lw - 10, 24, hSet, NULL, NULL, NULL);
