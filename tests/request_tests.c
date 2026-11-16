@@ -221,6 +221,38 @@ static void t_prefill(Cfg *g)
     conv_free(c);
 }
 
+/* a screenshot attached to a tool result goes to the model as a user message right after the tool results */
+static void t_tool_image(Cfg *g)
+{
+    Conv *c = conv_new();
+    char *b, *tool, *img;
+    int u = add(c, c->root, ROLE_USER, "Look at my screen"), a, t1, t2;
+    a = add(c, u, ROLE_ASSIST, "");
+    setstr(&c->n[a].tcalls, "[{\"id\":\"c1\",\"type\":\"function\",\"function\":{\"name\":\"screenshot\",\"arguments\":\"{}\"}},"
+                            "{\"id\":\"c2\",\"type\":\"function\",\"function\":{\"name\":\"system_info\",\"arguments\":\"{}\"}}]");
+    t1 = add(c, a, ROLE_TOOL, "Screenshot of the primary screen, 10 x 10 pixels; the image follows.");
+    setstr(&c->n[t1].tcid, "c1");
+    setstr(&c->n[t1].tname, "screenshot");
+    att_add(&c->n[t1], ATT_IMAGE, "screenshot.png", "data:image/png;base64,AAAA", "image/png");
+    t2 = add(c, t1, ROLE_TOOL, "OS: Windows");
+    setstr(&c->n[t2].tcid, "c2");
+    setstr(&c->n[t2].tname, "system_info");
+    g_req_lim = 0;
+    b = build_request(c, g);
+    CHECK(valid_json(b));
+    tool = strstr(b, "\"tool_call_id\":\"c2\"");
+    img = strstr(b, "\"image_url\":{\"url\":\"data:image/png;base64,AAAA\"}");
+    CHECK(tool && img && img > tool); /* after the last tool result of the round, not between them */
+    CHECK(strstr(b, "{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Image returned by the tool call above:\"}") != NULL);
+    dump("tool_image", b);
+    free(b);
+    c->n[t1].elided = 1; /* an old, shortened result does not send its image again */
+    b = build_request(c, g);
+    CHECK(strstr(b, "image_url") == NULL);
+    free(b);
+    conv_free(c);
+}
+
 int main(int argc, char **argv)
 {
     Cfg g;
@@ -232,6 +264,7 @@ int main(int argc, char **argv)
     t_fit(&g);
     t_logprobs(&g);
     t_prefill(&g);
+    t_tool_image(&g);
     printf("%d checks, %d failed\n", runs, fails);
     return fails != 0;
 }

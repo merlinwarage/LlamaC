@@ -98,8 +98,61 @@ static void t_bm25(void)
     CHECK(s[0] == 0 && s[1] == 0);
 }
 
+static void t_symbols(void)
+{
+    struct
+    {
+        const char *name, *line;
+        int want;
+    } T[] = {
+        {"fs_edit", "static char *fs_edit(J *a)", 1},
+        {"fs_edit", "static char *fs_edit(J *a);", 2},
+        {"fs_edit", "    res = fs_edit(a);", 0},
+        {"fs_edit", "    return fs_edit(a);", 0},
+        {"fs_edit", "    if (fs_edit(a))", 0},
+        {"fs_edit", "        printf(\"%d\", fs_edit(a));", 0},
+        {"Node", "typedef struct Node", 1},
+        {"Node", "} Node;", 1},
+        {"MAX_PATH", "#define MAX_PATH 260", 1},
+        {"parse", "def parse(self, text):", 1},
+        {"Parser", "class Parser(Base):", 1},
+        {"handler", "export async function handler(req, res) {", 1},
+        {"render", "  render() {", 1},
+        {"render", "  async render(props: Props): Promise<void> {", 1},
+        {"render", "  render();", 0},
+        {"Config", "export interface Config {", 1},
+        {"Config", "type Config = {", 1},
+        {"apiUrl", "export const apiUrl = 'x';", 1},
+        {"onClick", "const onClick = async (e) => {", 1},
+        {"onClick", "  onClick: function () {", 1},
+        {"Serve", "func (s *Server) Serve(l net.Listener) error {", 1},
+        {"Serve", "func Serve(addr string) {", 1},
+        {"run", "pub(crate) async fn run(&self) -> Result<()> {", 1},
+        {"Thing", "pub struct Thing {", 1},
+        {"Save", "    public static async Task<int> Save(string path)", 1},
+        {"Save", "    var n = await Save(path);", 0},
+        {"main", "main(int argc, char **argv)", 1},
+    };
+    for (size_t i = 0; i < sizeof T / sizeof T[0]; i++)
+    {
+        Rx rx[SYM_NRX];
+        int got;
+        CHECK(tx_sym_compile(rx, T[i].name));
+        got = tx_sym_line(rx, T[i].line, strlen(T[i].line));
+        if (got != T[i].want)
+            printf("  symbol %s in \"%s\": got %d, want %d\n", T[i].name, T[i].line, got, T[i].want);
+        CHECK(got == T[i].want);
+        for (int k = 0; k < SYM_NRX; k++)
+            rx_free(&rx[k]);
+    }
+    CHECK(!tx_sym_name_ok("a b"));
+    CHECK(!tx_sym_name_ok("x.*"));
+    CHECK(tx_sym_name_ok("$scope"));
+}
+
 int main(void)
 {
+    t_symbols();
     t_ws_replace();
     t_fold();
     t_diff();

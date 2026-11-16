@@ -110,7 +110,7 @@ static void draw_btn(DRAWITEMSTRUCT *d)
     RECT r = d->rcItem;
     int pressed = (d->itemState & ODS_SELECTED) != 0, hot = (d->hwndItem == hHot);
     int primary = (id == IDC_NEW || id == IDC_SEND || id == IDOK), danger = (id == IDC_SEND && busy);
-    COLORREF par = (id == IDC_ATTACH || id == IDC_SEND || id == IDC_MCPBTN) ? cSurf : (id == IDC_NEW || id == IDOK || id == IDCANCEL || id == IDC_RESET) ? cPanel
+    COLORREF par = (id == IDC_ATTACH || id == IDC_SEND || id == IDC_MCPBTN || id == IDC_TOOLSBTN) ? cSurf : (id == IDC_NEW || id == IDOK || id == IDCANCEL || id == IDC_RESET) ? cPanel
                                                                                                                                      : cBg;
     COLORREF bg, fg, ln;
     if (primary)

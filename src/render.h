@@ -463,6 +463,31 @@ static void render_tool_calls(const char *json)
             while (al && ((unsigned char)ar[al] & 0xC0) == 0x80)
                 al--;
         }
+        if (nm && !strcmp(nm, "update_plan") && ar)
+        { /* the plan as a checklist */
+            J *pa = json_parse(ar), *items = j_get(pa, "items");
+            if (items && items->t == J_ARR)
+            {
+                re_add("\xE2\x96\xB8 Plan\n", strlen("\xE2\x96\xB8 Plan\n"), cAccent, CFE_BOLD, FACE);
+                for (J *it = items->child; it; it = it->next)
+                {
+                    const char *st = j_str(j_get(it, "status")), *tx = j_str(j_get(it, "text"));
+                    int done = st && !strcmp(st, "done"), now = st && !strcmp(st, "in_progress");
+                    SB l = {0};
+                    if (!tx)
+                        continue;
+                    sb_puts(&l, done ? "   \xE2\x98\x91  " : now ? "   \xE2\x96\xB6  " : "   \xE2\x98\x90  ");
+                    sb_puts(&l, tx);
+                    sb_putc(&l, '\n');
+                    re_add(l.p, l.n, done ? cDim : now ? cFg : cDim, now ? CFE_BOLD : 0, FACE);
+                    free(l.p);
+                }
+                j_free(pa);
+                free(s.p);
+                continue;
+            }
+            j_free(pa);
+        }
         sb_puts(&s, "\xE2\x96\xB8 Tool call: ");
         sb_puts(&s, nm ? nm : "?");
         sb_putc(&s, '(');

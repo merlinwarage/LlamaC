@@ -240,7 +240,8 @@ static void build_messages(SB *s, Conv *c, const Cfg *g, size_t tools_chars)
     int first = 1;
     int *p;
     int n;
-    int tools_left = 0, i0 = 0, lastu = -1;
+    int tools_left = 0, i0 = 0, lastu = -1, nimg = 0;
+    Att *imgs[16];
     char *md, *mode;
     size_t *cap;
     const char *query = "";
@@ -367,6 +368,22 @@ static void build_messages(SB *s, Conv *c, const Cfg *g, size_t tools_chars)
             else
                 sb_json(s, m->content);
             sb_putc(s, '}');
+            if (!m->elided && mode[i] != 1)
+                for (int k = 0; k < m->na && nimg < 16; k++)
+                    if (m->att[k].kind == ATT_IMAGE)
+                        imgs[nimg++] = &m->att[k];
+            if (tools_left == 0 && nimg)
+            { /* tool messages carry text only: images from tools (screenshots) follow as a user message */
+                sb_puts(s, ",{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Image returned by the tool call above:\"}");
+                for (int k = 0; k < nimg; k++)
+                {
+                    sb_puts(s, ",{\"type\":\"image_url\",\"image_url\":{\"url\":");
+                    sb_json(s, imgs[k]->data);
+                    sb_puts(s, "}}");
+                }
+                sb_puts(s, "]}");
+                nimg = 0;
+            }
             continue;
         }
         tools_left = 0;

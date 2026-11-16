@@ -121,6 +121,18 @@ static double ms_cpt(void)
     ms_unlock();
     return c;
 }
+/* 1 when the current model's characters per token have been measured */
+static int ms_known(void)
+{
+    int k;
+    ms_lock();
+    {
+        MStat *s = G.model[0] ? ms_find_locked(G.model, 0) : NULL;
+        k = s && s->ncal >= 1;
+    }
+    ms_unlock();
+    return k;
+}
 /* a generation finished: calibrate from the prompt size the server measured for the request we built */
 static void ms_note_gen(int prompt_n, size_t chars, int lenstop)
 {

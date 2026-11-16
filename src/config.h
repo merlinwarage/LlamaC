@@ -28,6 +28,8 @@ typedef struct
     char kvdir[512];                         /* the server's --slot-save-path as seen from here (relative = exe folder) */
     int kvmax;                               /* GB the llamac-*.bin files in kvdir may use, 0 = no limit */
     char mcpoff[1024];                       /* MCP servers switched off in the input box menu: "|name|name|" */
+    int shot;                                /* 1 = offer the screenshot tool (asks every time) */
+    char tooloff[1024];                      /* built-in tools switched off in the Tools dialog: "|name|name|" */
 } Cfg;
 /* kind: 0 text, 1 number override (string, empty = server default), 2 integer, 3 checkbox */
 typedef struct
@@ -85,6 +87,8 @@ static const Field FIELDS[] = {
     FLD("kvdir", "KV slot folder", 0, kvdir, NULL, NULL),
     FLD("kvmax", "KV folder limit (GB)", 2, kvmax, NULL, NULL),
     FLD("mcpoff", NULL, 0, mcpoff, NULL, NULL), /* no settings control: set from the MCP button */
+    FLD("shot", "Allow screenshot tool (asks every time)", 3, shot, NULL, NULL),
+    FLD("tooloff", NULL, 0, tooloff, NULL, NULL), /* no settings control: the Tools dialog */
 };
 #define NFIELDS ((int)(sizeof FIELDS / sizeof FIELDS[0]))
 static int fidx(const char *key)

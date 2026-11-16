@@ -36,7 +36,8 @@ static void strip_cr(char *s)
    Besides the system prompt a profile keeps the settings that suit a kind of work and a model: the reminder, the
    tool set, sampling values, the reasoning budget and the template kwargs. Entries of older versions have only
    name and text; picking them changes only the prompt. */
-static const char *const PROF_KEYS[] = {"remind", "toolset", "temp", "top_k", "top_p", "min_p", "rbud", "kwargs"};
+static const char *const PROF_KEYS[] = {"remind", "toolset", "temp", "top_k", "top_p", "min_p", "rbud", "kwargs", "tooloff"};
+static char s_tooloff[1024]; /* the dialog's copy of G.tooloff (Built-in tools... button, profiles); applied with OK */
 #define NPK ((int)(sizeof PROF_KEYS / sizeof PROF_KEYS[0]))
 typedef struct
 {
@@ -64,6 +65,8 @@ static void sysp_free(void)
 static char *ctl_value(int fi)
 {
     char b[16];
+    if (fi >= 0 && !strcmp(FIELDS[fi].key, "tooloff"))
+        return xstrdup(s_tooloff);
     if (fi < 0 || !setCtl[fi])
         return NULL;
     if (!strcmp(FIELDS[fi].key, "toolset"))
@@ -76,6 +79,11 @@ static char *ctl_value(int fi)
 }
 static void ctl_set(int fi, const char *v)
 {
+    if (fi >= 0 && v && !strcmp(FIELDS[fi].key, "tooloff"))
+    {
+        snprintf(s_tooloff, sizeof s_tooloff, "%s", v);
+        return;
+    }
     if (fi < 0 || !setCtl[fi] || !v)
         return;
     if (!strcmp(FIELDS[fi].key, "toolset"))
@@ -348,6 +356,7 @@ static const SItem SLAY_R[] = {
     {"autoappr", NULL, "Runs every tool call without asking, including writes, deletes and shell commands.", 0},
     {"toolmax", "Max tool rounds", "How many tool-call rounds the model may do for one message before it is stopped. Empty or 0 = 10.", 0},
     {"mem", NULL, "Saved facts about you are added to the system prompt - the ones that match the chat's first message first. With tools on, the model can save and search them (memory_save / memory_search).", 0},
+    {"shot", NULL, "Adds the screenshot tool: the model can ask to see the screen or a window (needs a vision model). Every screenshot asks first, even with auto-approve, because the screen can show anything, including personal or confidential data.", 0},
     {"verify", "Verify command", "Run after every tool round that changed files, e.g. build.bat or npm test (cmd.exe, in the root folder, 5 min limit). Its result is added to the tool result, so the model sees build errors at once. Runs without asking: it is your own command.", 0},
     {"!mcp", NULL, NULL, 0},
     {"#", "Display", NULL, 0},
@@ -409,7 +418,7 @@ static LRESULT CALLBACK SetProc(HWND h, UINT m, WPARAM w, LPARAM l)
     {
         DRAWITEMSTRUCT *d = (DRAWITEMSTRUCT *)l;
         UINT oid = d->CtlID;
-        if (oid == IDC_MCPEDIT || oid == IDC_MCPRELOAD || oid == IDC_SYSSAVE || oid == IDC_SYSDEL || oid == IDC_BROWSE_FS || oid == IDC_BROWSE_KV)
+        if (oid == IDC_MCPEDIT || oid == IDC_MCPRELOAD || oid == IDC_SYSSAVE || oid == IDC_SYSDEL || oid == IDC_BROWSE_FS || oid == IDC_BROWSE_KV || oid == IDC_TOOLSDLG)
             d->CtlID = IDC_RESET; /* same look as the Reset button */
         draw_btn(d);
         d->CtlID = oid;
@@ -425,6 +434,8 @@ static LRESULT CALLBACK SetProc(HWND h, UINT m, WPARAM w, LPARAM l)
             sysp_on_save(h);
         else if (LOWORD(w) == IDC_SYSDEL)
             sysp_on_delete(h);
+        else if (LOWORD(w) == IDC_TOOLSDLG)
+            tools_dialog(h, s_tooloff, sizeof s_tooloff);
         else if (LOWORD(w) == IDC_BROWSE_FS || LOWORD(w) == IDC_BROWSE_KV)
         {
             int fi = fidx(LOWORD(w) == IDC_BROWSE_FS ? "fsroot" : "kvdir");
@@ -501,10 +512,12 @@ static LRESULT CALLBACK SetProc(HWND h, UINT m, WPARAM w, LPARAM l)
             }
             path_clean(G.fsroot);
             path_clean(G.kvdir);
+            snprintf(G.tooloff, sizeof G.tooloff, "%s", s_tooloff);
             cfg_save();
             tools_apply_settings();
-            layout(); /* the MCP button in the input box comes and goes with "Enable tools" */
+            layout(); /* the MCP and Tools buttons in the input box come and go with "Enable tools" */
             mcp_btn_update();
+            tools_btn_update();
             set_theme();
             render_all();
             DestroyWindow(h);
@@ -544,6 +557,7 @@ static void show_settings(void)
     const int sysExtra = 110, sysRow = 32; /* textarea extra height, saved-prompt picker row */
     const int halfW = (colW - 10) / 2, halfLab = 104;
     sysp_load();
+    snprintf(s_tooloff, sizeof s_tooloff, "%s", G.tooloff);
     /* height of each column of the layout (same walk as the creation loop below) */
     int colH[2] = {0, 0};
     for (int c = 0; c < 2; c++)
@@ -617,7 +631,9 @@ static void show_settings(void)
             }
             if (!strcmp(it->key, "!mcp"))
             { /* MCP server buttons, part of the Tools section */
-                HWND be = mkbtn(hSet, L"Edit MCP servers...", IDC_MCPEDIT), br = mkbtn(hSet, L"Reload MCP", IDC_MCPRELOAD);
+                HWND be = mkbtn(hSet, L"Edit MCP servers...", IDC_MCPEDIT), br = mkbtn(hSet, L"Reload MCP", IDC_MCPRELOAD), btd = mkbtn(hSet, L"Built-in tools...", IDC_TOOLSDLG);
+                MoveWindow(btd, x0 + 300, y + 2, 140, 28, FALSE);
+                tip_add(tt, btd, "Switch single built-in tools off (or on) to save tokens and avoid needless tool calls. Also stored in a profile when you Save it.");
                 MoveWindow(be, x0, y + 2, 170, 28, FALSE);
                 MoveWindow(br, x0 + 180, y + 2, 110, 28, FALSE);
                 tip_add(tt, be, "Edit the MCP server list (data\\mcp.json): local programs (stdio) or HTTP servers whose tools the model can call.");

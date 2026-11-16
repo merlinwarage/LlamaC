@@ -109,8 +109,9 @@ static void layout(void)
     MoveWindow(B(IDC_ATTACH), left + 10, yBox + (boxH - 38) / 2, 38, 38, TRUE);
     if (G.tools_on)
     { /* MCP server switch next to the attach button */
-        MoveWindow(B(IDC_MCPBTN), left + 52, yBox + (boxH - 38) / 2, 74, 38, TRUE);
-        MoveWindow(hInput, left + 134, yBox + 14, cw - 134 - 100, boxH - 28, TRUE);
+        MoveWindow(B(IDC_TOOLSBTN), left + 52, yBox + (boxH - 38) / 2, 86, 38, TRUE);
+        MoveWindow(B(IDC_MCPBTN), left + 142, yBox + (boxH - 38) / 2, 74, 38, TRUE);
+        MoveWindow(hInput, left + 224, yBox + 14, cw - 224 - 100, boxH - 28, TRUE);
     }
     else
         MoveWindow(hInput, left + 60, yBox + 14, cw - 60 - 100, boxH - 28, TRUE);
@@ -250,6 +251,7 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l)
         mkbtn(h, L"Delete chat", IDC_DELC);
         mkbtn(h, L"+", IDC_ATTACH);
         mkbtn(h, L"MCP", IDC_MCPBTN);
+        mkbtn(h, L"Tools", IDC_TOOLSBTN);
         mkbtn(h, L"Send", IDC_SEND);
         /* drops also work when the app runs elevated (UIPI would otherwise block them from Explorer) */
         ChangeWindowMessageFilterEx(h, WM_DROPFILES, MSGFLT_ALLOW, NULL);
@@ -267,10 +269,14 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l)
         }
         return 0;
     }
+    case WM_APP_ASK: /* ask_user from the tool runner thread (it waits in SendMessage) */
+        ask_user_ui((AskReq *)l);
+        return 0;
     case WM_APP_INIT:
         layout();
         mcp_btn_update();
         tools_startup();
+        tools_btn_update();
         set_status("Connecting...");
         if (!nconv)
             convs_add(conv_new());
@@ -475,6 +481,9 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l)
             break;
         case IDC_MCPBTN:
             mcp_menu();
+            break;
+        case IDC_TOOLSBTN:
+            act_tools();
             break;
         case IDC_QUEUE:
             act_queue();
@@ -704,6 +713,13 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l)
                     *res++ = 0;
                     int t = node_add(genConv, genConv->leaf, ROLE_TOOL);
                     Node *tn = &genConv->n[t];
+                    if (!strncmp(res, "\x01IMAGE ", 7) && strchr(res, '\n'))
+                    { /* screenshot: the image is attached to the tool result */
+                        char *nl2 = strchr(res, '\n');
+                        *nl2 = 0;
+                        att_add(tn, ATT_IMAGE, "screenshot.png", res + 7, "image/png");
+                        res = nl2 + 1;
+                    }
                     setstr(&tn->content, res);
                     setstr(&tn->tcid, id);
                     setstr(&tn->tname, nm);
@@ -927,6 +943,37 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE hp, PWSTR cl, int show)
     init_data_dir();
     load_all();
     set_theme();
+#ifdef LLAMAC_TOOLTEST
+    /* developer test mode (not in release builds): llamac.exe --tool <name> <args.json> <out.txt>
+       runs one built-in tool with the saved settings, without approval dialogs, and writes its result */
+    {
+        int argc = 0;
+        wchar_t **argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+        if (argc == 5 && !wcscmp(argv[1], L"--tool"))
+        {
+            size_t n = 0;
+            char *name = u_from(argv[2]), *args = (char *)read_file(argv[3], &n), *res;
+            G.autoappr = 1;
+            fs_register();
+            mem_register();
+            date_register();
+            guides_register();
+            extra_register();
+            refresh_models(); /* context size, vision, slots */
+            if (!strcmp(name, "screenshot"))
+            { /* bypasses the approval dialog that the tool always shows */
+                J *a = json_parse_strict(args ? args : "{}"); /* strict, like tool_execute: bad JSON must not mean "whole screen" */
+                g_vision = 1;
+                res = a ? shot_call(a) : xstrdup("Error: invalid JSON arguments");
+                j_free(a);
+            }
+            else
+                res = tool_execute(name, args ? args : "{}");
+            write_file(argv[4], res, strlen(res));
+            return 0;
+        }
+    }
+#endif
     WNDCLASSEXW wc;
     memset(&wc, 0, sizeof wc);
     wc.cbSize = sizeof wc;

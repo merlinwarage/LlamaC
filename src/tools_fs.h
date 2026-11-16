@@ -205,10 +205,19 @@ static char *fs_read(J *a)
     unsigned char *b = read_file(p, &len);
     if (!b)
         return fs_err("cannot read the file (or it is larger than 100 MB)");
-    if (fs_binary(b, len))
+    if (doc_kind(j_str(j_get(a, "path"))))
+    { /* PDF / DOCX / XLSX: their text, then offset/limit as for any text file */
+        char derr[300], *dt = doc_text(j_str(j_get(a, "path")), b, len, derr, sizeof derr);
+        free(b);
+        if (!dt)
+            return fs_err(derr);
+        b = (unsigned char *)dt;
+        len = strlen(dt);
+    }
+    else if (fs_binary(b, len))
     {
         free(b);
-        return fs_err("binary files are not supported");
+        return fs_err("binary files are not supported (PDF, DOCX and XLSX are read as text)");
     }
     char *t = (char *)b;
     if (len >= 3 && b[0] == 0xEF && b[1] == 0xBB && b[2] == 0xBF)
@@ -1138,6 +1147,386 @@ static char *fs_run(J *a)
 }
 
 /* ---------- approval preview: what a write tool would change, as a diff (NULL = nothing to show) ---------- */
+/* ---------- multi_edit: several replacements in one file, all or nothing ---------- */
+/* one edit on text: exact (also with CRLF line ends), else ignoring whitespace. New text, or NULL with err. */
+static char *fs_apply_one(const char *text, const char *oldt, const char *newt, int all, int *line, int *fuzzy, char *err, size_t es)
+{
+    char *o2 = NULL, *n2 = NULL, *res = NULL;
+    const char *so = oldt, *sn = newt;
+    int cnt;
+    *fuzzy = 0;
+    *line = 0;
+    if (!*oldt)
+    {
+        snprintf(err, es, "old_text is empty");
+        return NULL;
+    }
+    cnt = fs_count(text, so);
+    if (!cnt && strstr(text, "\r\n") && strchr(oldt, '\n'))
+    {
+        o2 = fs_crlf(oldt);
+        n2 = fs_crlf(newt);
+        so = o2;
+        sn = n2;
+        cnt = fs_count(text, so);
+    }
+    if (cnt > 1 && !all)
+        snprintf(err, es, "old_text matches %d places; add surrounding lines or set replace_all", cnt);
+    else if (cnt)
+    {
+        SB o = {0};
+        const char *q = text, *hit;
+        size_t ol = strlen(so);
+        while ((hit = strstr(q, so)) != NULL)
+        {
+            sb_add(&o, q, (size_t)(hit - q));
+            if (!*line)
+                *line = tx_line_of(sbs(&o), o.n);
+            sb_puts(&o, sn);
+            q = hit + ol;
+            if (!all)
+                break;
+        }
+        sb_puts(&o, q);
+        res = o.p ? o.p : xstrdup("");
+    }
+    else
+    {
+        int wc = 0;
+        res = tx_ws_replace(text, oldt, newt, all, &wc, line);
+        if (res)
+            *fuzzy = 1;
+        else if (wc > 1)
+            snprintf(err, es, "old_text matches %d places when whitespace is ignored; add surrounding lines or set replace_all", wc);
+        else
+        {
+            int hint = tx_first_line_hint(text, oldt);
+            if (hint)
+                snprintf(err, es, "old_text not found; its first line occurs at line %d, so a later line differs", hint);
+            else
+                snprintf(err, es, "old_text not found");
+        }
+    }
+    free(o2);
+    free(n2);
+    return res;
+}
+/* applies every edit of the "edits" array in order; the new text, or NULL with err naming the failing edit */
+static char *fs_multi_apply(const char *text, J *edits, SB *report, char *err, size_t es)
+{
+    char *cur = xstrdup(text);
+    int k = 0;
+    if (!edits || edits->t != J_ARR || !edits->child)
+    {
+        snprintf(err, es, "'edits' must be a non-empty array of {old_text, new_text}");
+        free(cur);
+        return NULL;
+    }
+    for (J *e = edits->child; e; e = e->next, k++)
+    {
+        const char *ot = j_str(j_get(e, "old_text")), *nt = j_str(j_get(e, "new_text"));
+        int all = j_get(e, "replace_all") && j_get(e, "replace_all")->num != 0, line, fz;
+        char e1[300], *nx;
+        if (!ot || !nt)
+        {
+            snprintf(err, es, "edit %d: old_text and new_text are required. No change was made.", k + 1);
+            free(cur);
+            return NULL;
+        }
+        nx = fs_apply_one(cur, ot, nt, all, &line, &fz, e1, sizeof e1);
+        if (!nx)
+        {
+            snprintf(err, es, "edit %d: %s. No change was made; fix that edit and send all edits again.", k + 1, e1);
+            free(cur);
+            return NULL;
+        }
+        if (report)
+            sb_printf(report, "edit %d: line %d%s\n", k + 1, line, fz ? " (matched ignoring whitespace)" : "");
+        free(cur);
+        cur = nx;
+    }
+    return cur;
+}
+static char *fs_multi_edit(J *a)
+{
+    const char *path = j_str(j_get(a, "path")), *e;
+    wchar_t p[MAX_PATH];
+    size_t len;
+    unsigned char *b;
+    char err[400], *nt;
+    SB rep = {0};
+    if (!path)
+        return fs_err("'path' is required");
+    if ((e = fs_resolve(path, p)) != NULL)
+        return fs_err(e);
+    if (!fs_isfile(p))
+        return fs_err("not a file");
+    b = read_file(p, &len);
+    if (!b)
+        return fs_err("cannot read the file");
+    if (fs_binary(b, len))
+    {
+        free(b);
+        return fs_err("binary files are not supported");
+    }
+    nt = fs_multi_apply((char *)b, j_get(a, "edits"), &rep, err, sizeof err);
+    free(b);
+    if (!nt)
+    {
+        free(rep.p);
+        return fs_err(err);
+    }
+    cp_record(p);
+    if (!write_atomic(p, nt, strlen(nt)) && !write_file(p, nt, strlen(nt)))
+    {
+        snprintf(err, sizeof err, "could not write the file (Win32 error %lu)", (unsigned long)GetLastError());
+        free(nt);
+        free(rep.p);
+        return fs_err(err);
+    }
+    {
+        SB m = {0};
+        char *rel = fs_rel(p);
+        sb_puts(&m, "Applied all edits to ");
+        sb_puts(&m, rel);
+        sb_puts(&m, ":\n");
+        sb_puts(&m, sbs(&rep));
+        free(rel);
+        free(nt);
+        free(rep.p);
+        return m.p;
+    }
+}
+
+/* ---------- find_symbol: where a name is defined ---------- */
+typedef struct
+{
+    SB out;
+    int matches, maxm, nfiles;
+    Rx rx[SYM_NRX];
+    const char *name;
+    wchar_t *inc;
+} FsSym;
+static int fs_sym_cb(const wchar_t *full, const WIN32_FIND_DATAW *fd, void *c)
+{
+    FsSym *S = (FsSym *)c;
+    size_t len, nl = strlen(S->name);
+    unsigned char *b;
+    if (g_stop)
+        return 0;
+    if (S->inc && !PathMatchSpecW(fd->cFileName, S->inc))
+        return 1;
+    if (fd->nFileSizeHigh || fd->nFileSizeLow > 2u * 1024 * 1024)
+        return 1;
+    b = read_file(full, &len);
+    if (!b)
+        return 1;
+    if (!fs_binary(b, len))
+    {
+        const char *t = (const char *)b, *hit;
+        char *rel = NULL;
+        int found = 0;
+        /* only lines that contain the name are checked against the patterns */
+        for (const char *q = t; (hit = strstr(q, S->name)) != NULL && S->matches < S->maxm;)
+        {
+            const char *ls = hit, *le = hit;
+            int kind;
+            while (ls > t && ls[-1] != '\n')
+                ls--;
+            while (*le && *le != '\n')
+                le++;
+            kind = tx_sym_line(S->rx, ls, (size_t)(le - ls));
+            if (kind)
+            {
+                size_t L = (size_t)(le - ls), cut;
+                if (L && ls[L - 1] == '\r')
+                    L--;
+                cut = tx_cut(ls, L, 220);
+                if (!rel)
+                    rel = fs_rel(full);
+                sb_printf(&S->out, "%s:%d: ", rel, tx_line_of(t, (size_t)(ls - t)));
+                sb_add(&S->out, ls, cut);
+                sb_puts(&S->out, cut < L ? " ..." : "");
+                sb_puts(&S->out, kind == 2 ? "   (declaration)\n" : "\n");
+                S->matches++;
+                found = 1;
+            }
+            q = *le ? le + 1 : le;
+            if (!*q)
+                break;
+        }
+        (void)nl;
+        S->nfiles += found;
+        free(rel);
+    }
+    free(b);
+    return S->matches < S->maxm;
+}
+static char *fs_find_symbol(J *a)
+{
+    const char *name = j_str(j_get(a, "name")), *inc = j_str(j_get(a, "include")), *e;
+    wchar_t p[MAX_PATH];
+    FsSym S;
+    int budget = 50000;
+    char *res;
+    if (!tx_sym_name_ok(name))
+        return fs_err("'name' must be one identifier, e.g. parse_args or UserService (no dots or patterns; use grep for those)");
+    if ((e = fs_resolve(j_str(j_get(a, "path")), p)) != NULL)
+        return fs_err(e);
+    if (!fs_isdir(p))
+        return fs_err("not a directory");
+    memset(&S, 0, sizeof S);
+    S.name = name;
+    S.maxm = 50;
+    if (!tx_sym_compile(S.rx, name))
+        return fs_err("could not build the search patterns");
+    S.inc = (inc && *inc) ? w_from(inc) : NULL;
+    fs_each(p, 0, fs_sym_cb, &S, &budget);
+    if (!S.out.n)
+    {
+        SB m = {0};
+        sb_printf(&m, "No definition of %s found. It may be defined outside the root folder (library) or generated; grep finds its uses.", name);
+        res = m.p;
+    }
+    else
+    {
+        SB h = {0};
+        sb_printf(&h, "%d definition(s) of %s:\n", S.matches, name);
+        sb_puts(&h, sbs(&S.out));
+        if (S.matches >= S.maxm)
+            sb_puts(&h, "[result limit reached; narrow path or include]\n");
+        res = h.p;
+    }
+    for (int i = 0; i < SYM_NRX; i++)
+        rx_free(&S.rx[i]);
+    free(S.inc);
+    free(S.out.p);
+    return res;
+}
+
+/* ---------- summarize_file: a separate model call, only the summary enters the conversation ---------- */
+static char *fs_summarize(J *a)
+{
+    const char *path = j_str(j_get(a, "path")), *focus = j_str(j_get(a, "focus")), *e;
+    wchar_t p[MAX_PATH];
+    size_t len, chunk, parts, done = 0;
+    unsigned char *b;
+    char *text, err[400] = "", *rel, *out = NULL;
+    int lim, slot = -1, restore = 0, lines = 1;
+    SB sys = {0}, sums = {0};
+    if (!path)
+        return fs_err("'path' is required");
+    if ((e = fs_resolve(path, p)) != NULL)
+        return fs_err(e);
+    if (!fs_isfile(p))
+        return fs_err("not a file");
+    b = read_file(p, &len);
+    if (!b)
+        return fs_err("cannot read the file (or it is larger than 100 MB)");
+    if (doc_kind(path))
+    {
+        text = doc_text(path, b, len, err, sizeof err);
+        free(b);
+        if (!text)
+            return fs_err(err);
+    }
+    else if (fs_binary(b, len))
+    {
+        free(b);
+        return fs_err("binary files are not supported");
+    }
+    else
+        text = (char *)b;
+    len = strlen(text);
+    for (const char *q = text; *q; q++)
+        lines += *q == '\n';
+    rel = fs_rel(p);
+    /* one part has to fit the context with room for the reply */
+    lim = g_req_lim > 0 ? g_req_lim : g_nctx > 0 ? g_nctx : 8192;
+    chunk = (size_t)((lim - 2500 - (G.sumbud > 0 ? G.sumbud : 2048)) * g_cpt * 0.75);
+    if (chunk < 4000)
+        chunk = 4000;
+    parts = (len + chunk - 1) / chunk;
+    if (parts > 12)
+        parts = 12; /* longer files: the first 12 parts; the result says so */
+    sb_puts(&sys, "You summarize a document for another assistant that cannot see it. Keep what someone working with the document needs: "
+                  "its purpose and structure, key facts, names, numbers, dates, definitions, file paths, function or section names, "
+                  "decisions and open issues. Dense bullet points, no commentary, do not invent anything.");
+    if (focus && *focus)
+    {
+        sb_puts(&sys, " Focus especially on: ");
+        sb_puts(&sys, focus);
+    }
+    if (G.kvslot)
+    { /* keep the conversation's KV cache: another slot, or save slot 0 and restore it afterwards */
+        if (g_nslots > 1)
+            slot = 1;
+        else if (g_slot_conv[0] && slot_action("save", g_slot_conv))
+        {
+            post_msg(14, g_slot_conv);
+            restore = 1;
+        }
+    }
+    for (size_t i = 0; i < parts && !g_stop; i++)
+    {
+        size_t a0 = done, a1 = a0 + chunk < len ? a0 + chunk : len;
+        SB u = {0};
+        char what[200], *r;
+        while (a1 < len && a1 > a0 + chunk / 2 && text[a1] != '\n') /* end the part at a line break */
+            a1--;
+        while (a1 < len && a1 > a0 && ((unsigned char)text[a1] & 0xC0) == 0x80) /* never inside a UTF-8 character */
+            a1--;
+        snprintf(what, sizeof what, "Summarizing %.120s (part %u of %u)", rel, (unsigned)(i + 1), (unsigned)parts);
+        post_msg(9, what);
+        sb_printf(&u, "Document: %s%s\n-----\n", rel, parts > 1 ? " (one part of it)" : "");
+        sb_add(&u, text + a0, a1 - a0);
+        sb_puts(&u, parts > 1 ? "\n-----\nSummarize this part in at most 300 words." : "\n-----\nSummarize the document in at most 500 words.");
+        r = llm_complete(sbs(&sys), sbs(&u), 1500 + (G.sumbud > 0 ? G.sumbud : 4096), slot, &g_req, &g_stop, what, err, sizeof err);
+        free(u.p);
+        if (!r)
+            break;
+        if (parts > 1)
+            sb_printf(&sums, "### Part %u (lines %d-%d)\n", (unsigned)(i + 1), tx_line_of(text, a0), tx_line_of(text, a1));
+        sb_puts(&sums, r);
+        sb_putc(&sums, '\n');
+        free(r);
+        done = a1;
+    }
+    if (!err[0] && parts > 1 && !g_stop)
+    { /* combine the part summaries */
+        SB u = {0};
+        sb_printf(&u, "Partial summaries of %s:\n\n", rel);
+        sb_puts(&u, sbs(&sums));
+        sb_puts(&u, "\nCombine them into one summary of at most 600 words. Keep the line ranges where useful.");
+        out = llm_complete(sbs(&sys), sbs(&u), 1500 + (G.sumbud > 0 ? G.sumbud : 4096), slot, &g_req, &g_stop, "Combining the summaries", err, sizeof err);
+        free(u.p);
+    }
+    else if (!err[0] && !g_stop)
+        out = xstrdup(sbs(&sums));
+    if (restore)
+        slot_action("restore", g_slot_conv);
+    free(sys.p);
+    free(sums.p);
+    {
+        SB m = {0};
+        if (out)
+        {
+            sb_printf(&m, "Summary of %s (%d lines, ~%d tokens%s). Use read_file with offset/limit for exact text.\n\n", rel, lines,
+                      (int)(len / g_cpt), done < len ? "; only the first part was summarized, the file is very long" : "");
+            sb_puts(&m, out);
+        }
+        else
+        {
+            sb_puts(&m, "Error: the summary failed: ");
+            sb_puts(&m, g_stop ? "cancelled" : err[0] ? err : "unknown error");
+        }
+        free(out);
+        free(rel);
+        free(text);
+        return m.p;
+    }
+}
+
 static char *fs_preview(const char *tool, J *a)
 {
     const char *path = j_str(j_get(a, "path"));
@@ -1148,6 +1537,32 @@ static char *fs_preview(const char *tool, J *a)
     SB o = {0};
     if (!path || fs_resolve(path, p))
         return NULL;
+    if (!strcmp(tool, "multi_edit"))
+    {
+        char err[400], *nt;
+        b = fs_isfile(p) ? read_file(p, &len) : NULL;
+        if (!b)
+            return xstrdup("(the file cannot be read)");
+        nt = fs_multi_apply((char *)b, j_get(a, "edits"), NULL, err, sizeof err);
+        if (nt)
+        {
+            d = tx_diff((char *)b, nt, 3000);
+            free(nt);
+        }
+        else
+        {
+            sb_puts(&o, "(the tool will report an error: ");
+            sb_puts(&o, err);
+            sb_puts(&o, ")\n");
+        }
+        free(b);
+        if (d)
+        {
+            sb_puts(&o, d);
+            free(d);
+        }
+        return o.p;
+    }
     if (fs_isfile(p))
         b = read_file(p, &len);
     if (b && fs_binary(b, len))
@@ -1245,6 +1660,12 @@ static char *fs_call(const char *tool, J *a)
         return fs_delete(a);
     if (!strcmp(tool, "run_command"))
         return fs_run(a);
+    if (!strcmp(tool, "multi_edit"))
+        return fs_multi_edit(a);
+    if (!strcmp(tool, "find_symbol"))
+        return fs_find_symbol(a);
+    if (!strcmp(tool, "summarize_file"))
+        return fs_summarize(a);
     return fs_err("unknown file tool");
 }
 
@@ -1263,8 +1684,14 @@ static void fs_register(void)
              "{\"type\":\"object\",\"properties\":{\"pattern\":{\"type\":\"string\",\"description\":\"Regular expression\"},\"path\":{\"type\":\"string\",\"description\":\"Start directory relative to the root folder. Default: the root.\"},\"include\":{\"type\":\"string\",\"description\":\"File name wildcard(s), e.g. *.c;*.h\"},\"ignore_case\":{\"type\":\"boolean\",\"description\":\"Case-insensitive match. Default false.\"},\"literal\":{\"type\":\"boolean\",\"description\":\"Treat pattern as plain text, not a regex\"},\"context\":{\"type\":\"integer\",\"description\":\"Lines of context around each match, 0-5. Default 0.\"},\"max_results\":{\"type\":\"integer\",\"description\":\"Maximum matching lines. Default 100, max 500.\"}},\"required\":[\"pattern\"]}", 0, 0, "grep", 1, 0);
     tool_add("glob", "Find files by path pattern: * and ? match inside one folder name, ** matches any number of folders. Example: src/**/*.h. A pattern without / matches file names at any depth, e.g. *.c.",
              "{\"type\":\"object\",\"properties\":{\"pattern\":{\"type\":\"string\",\"description\":\"Glob pattern\"},\"path\":{\"type\":\"string\",\"description\":\"Start directory relative to the root folder. Default: the root.\"},\"max_results\":{\"type\":\"integer\",\"description\":\"Default 200, max 500\"}},\"required\":[\"pattern\"]}", 0, 0, "glob", 1, 0);
+    tool_add("find_symbol", "Find where a function, class, type, macro or constant is defined (not its uses). Returns path:line: text. Quicker than grep for finding code.",
+             "{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\",\"description\":\"Exact identifier\"},\"path\":{\"type\":\"string\",\"description\":\"Start directory. Default: the root.\"},\"include\":{\"type\":\"string\",\"description\":\"File wildcard(s), e.g. *.c;*.h\"}},\"required\":[\"name\"]}", 0, 0, "find_symbol", 1, 0);
+    tool_add("summarize_file", "Summarize a long file (also PDF, DOCX, XLSX) in a separate model call; only the summary enters this conversation, saving context. Use read_file for exact text.",
+             "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"focus\":{\"type\":\"string\",\"description\":\"What to pay attention to (optional)\"}},\"required\":[\"path\"]}", 0, 0, "summarize_file", 1, 0);
     if (G.fswrite)
     {
+    tool_add("multi_edit", "Apply several replacements to one file in one call, in order, all or nothing. Each works like edit_file.",
+             "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"edits\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"old_text\":{\"type\":\"string\"},\"new_text\":{\"type\":\"string\"},\"replace_all\":{\"type\":\"boolean\"}},\"required\":[\"old_text\",\"new_text\"]}}},\"required\":[\"path\",\"edits\"]}", 0, 0, "multi_edit", 0, 0);
     tool_add("write_file", "Create or overwrite a text file (parent folders are created). Set append to add to the end instead. Prefer edit_file for changes to existing files.",
              "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"content\":{\"type\":\"string\"},\"append\":{\"type\":\"boolean\"}},\"required\":[\"path\",\"content\"]}", 0, 0, "write_file", 0, 0);
     tool_add("edit_file", "Replace an exact piece of text in an existing file. old_text must match exactly once (include enough surrounding lines to make it unique) unless replace_all is true. Returns the edited region so you can verify it.",

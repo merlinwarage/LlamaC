@@ -102,9 +102,11 @@ static const char *SUMMARY_PROMPT =
     "## Open questions and next steps\n"
     "If the transcript starts with an earlier summary, merge it in and keep its facts. Dense and factual, under 600 words, "
     "bullet points, no commentary, do not invent anything.";
-/* one-shot streaming summary request (streaming: closing it stops generation on the server, and it can report
-   progress); returns the summary text, or NULL with the reason in err */
-static char *compact_summarize(const char *transcript, char *err, size_t es)
+/* One streaming completion without tools, used for summaries (compression, summarize_file). Streaming, so closing
+   the request stops generation on the server and progress can be shown. Closing *hslot cancels it; *cancel tells the
+   caller it was cancelled. id_slot >= 0 pins a server slot. Returns the text, or NULL with the reason in err. */
+static char *llm_complete(const char *system, const char *user, int max_tokens, int id_slot, volatile HINTERNET *hslot,
+                          volatile LONG *cancel, const char *what, char *err, size_t es)
 {
     SB body = {0}, content = {0}, buf = {0};
     Url u;
@@ -116,20 +118,15 @@ static char *compact_summarize(const char *transcript, char *err, size_t es)
     char fin[32] = "";
     err[0] = 0;
     sb_puts(&body, "{\"messages\":[{\"role\":\"system\",\"content\":");
-    sb_json(&body, SUMMARY_PROMPT);
+    sb_json(&body, system);
     sb_puts(&body, "},{\"role\":\"user\",\"content\":");
-    {
-        SB t = {0};
-        sb_puts(&t, "--- CONVERSATION ---\n");
-        sb_puts(&t, transcript);
-        sb_puts(&t, "\n--- END ---\nWrite the summary now.");
-        sb_json(&body, sbs(&t));
-        free(t.p);
-    }
+    sb_json(&body, user);
     /* Reasoning models think before the summary: measured ~2100 reasoning + ~700 summary tokens for an 8k-token
        transcript (Qwen3 27B). A reasoning budget (llama-server reasoning_budget_tokens) caps the thinking; thinking
        is not forced off, since some models answer enable_thinking:false with an empty reply. */
-    sb_puts(&body, "}],\"stream\":true,\"max_tokens\":6144,\"temperature\":0.2");
+    sb_printf(&body, "}],\"stream\":true,\"max_tokens\":%d,\"temperature\":0.2", max_tokens);
+    if (id_slot >= 0)
+        sb_printf(&body, ",\"id_slot\":%d", id_slot);
     if (G.sumbud > 0)
         sb_printf(&body, ",\"reasoning_budget_tokens\":%d", G.sumbud);
     if (G.kwargs[0])
@@ -164,13 +161,13 @@ static char *compact_summarize(const char *transcript, char *err, size_t es)
         snprintf(err, es, "cannot connect to %s", G.url);
         goto done;
     }
-    InterlockedExchangePointer((PVOID volatile *)&g_creq, req);
-    if (g_ccancel)
+    InterlockedExchangePointer((PVOID volatile *)hslot, req);
+    if (*cancel)
         goto done;
     hd = auth_headers(G.key, 1);
     if (!WinHttpSendRequest(req, hd, (DWORD)-1, body.p, (DWORD)body.n, (DWORD)body.n, 0) || !WinHttpReceiveResponse(req, NULL))
     {
-        if (!g_ccancel)
+        if (!*cancel)
             snprintf(err, es, GetLastError() == ERROR_WINHTTP_TIMEOUT ? "no reply in time (timeout)" : "cannot connect to %s (server not running?)", G.url);
         goto done;
     }
@@ -219,11 +216,11 @@ static char *compact_summarize(const char *transcript, char *err, size_t es)
         {
             char st[200];
             last = GetTickCount();
-            snprintf(st, sizeof st, "Compressing older messages: %ld thinking + %ld summary tokens so far ...", nreason, ntok);
+            snprintf(st, sizeof st, "%s: %ld thinking + %ld answer tokens so far ...", what, nreason, ntok);
             post_msg(9, st);
         }
     }
-    if (status != 200 && !g_ccancel)
+    if (status != 200 && !*cancel)
     {
         J *r = json_parse(sbs(&buf));
         const char *m = j_str(j_get(j_get(r, "error"), "message"));
@@ -232,7 +229,7 @@ static char *compact_summarize(const char *transcript, char *err, size_t es)
     }
 done:
     {
-        HINTERNET h = (HINTERNET)InterlockedExchangePointer((PVOID volatile *)&g_creq, NULL);
+        HINTERNET h = (HINTERNET)InterlockedExchangePointer((PVOID volatile *)hslot, NULL);
         if (h)
             WinHttpCloseHandle(h);
     }
@@ -243,7 +240,7 @@ done:
     free(hd);
     free(body.p);
     free(buf.p);
-    if (g_ccancel)
+    if (*cancel)
     {
         snprintf(err, es, "cancelled");
         free(content.p);
@@ -262,6 +259,17 @@ done:
     }
     free(content.p);
     return out;
+}
+static char *compact_summarize(const char *transcript, char *err, size_t es)
+{
+    SB t = {0};
+    char *r;
+    sb_puts(&t, "--- CONVERSATION ---\n");
+    sb_puts(&t, transcript);
+    sb_puts(&t, "\n--- END ---\nWrite the summary now.");
+    r = llm_complete(SUMMARY_PROMPT, sbs(&t), 6144, -1, &g_creq, &g_ccancel, "Compressing older messages", err, es);
+    free(t.p);
+    return r;
 }
 static DWORD WINAPI compact_worker(LPVOID arg)
 {

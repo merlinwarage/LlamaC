@@ -189,6 +189,8 @@ static void refresh_models(void)
         g_nctx = (int)nctx;
         J *mod = j_get(r, "modalities");
         int vis = mod && j_get(mod, "vision") && j_get(mod, "vision")->num != 0;
+        g_vision = vis;
+        g_nslots = (int)j_num(j_get(r, "total_slots"), 0);
         int aud = mod && j_get(mod, "audio") && j_get(mod, "audio")->num != 0;
         const char *tp = j_str(j_get(r, "chat_template"));
         setstr(&g_tmpl, tp ? tp : "");

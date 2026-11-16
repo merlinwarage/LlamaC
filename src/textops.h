@@ -695,4 +695,82 @@ static void tx_bm25(const char *query, const char *const *docs, int nd, double *
     free(D);
 }
 
+/* ---------- find_symbol: lines that define a name (functions, types, classes, macros, constants) ----------
+   Language-agnostic patterns for C/C++, C#, Java, JS/TS, Python, Go, Rust, PHP, Kotlin, Swift. */
+#define SYM_NRX 6
+static int tx_sym_name_ok(const char *n)
+{
+    size_t k = 0;
+    if (!n || !(isalpha((unsigned char)*n) || *n == '_' || *n == '$'))
+        return 0;
+    for (; n[k]; k++)
+        if (!(isalnum((unsigned char)n[k]) || n[k] == '_' || n[k] == '$') || k > 100)
+            return 0;
+    return 1;
+}
+/* compiles the definition patterns for this name into rx[SYM_NRX]; 0 on failure */
+static int tx_sym_compile(Rx *rx, const char *name)
+{
+    char nm[220], pat[1200];
+    size_t k = 0;
+    static const char *const P[SYM_NRX] = {
+        /* keyword definitions: def/class/struct/function/fn/func/type/const/let/var..., with modifiers */
+        "^\\s*(?:(?:export|default|public|private|protected|internal|static|abstract|final|async|pub(?:\\([a-z]+\\))?|unsafe|inline|extern|virtual|override|sealed|partial|open|data|declare|typedef)\\s+)*"
+        "(?:def|class|struct|union|enum|interface|trait|type|typedef|function\\*?|func|fn|module|namespace|record|object|impl|macro_rules!|let|const|var|val|module_function)\\s+\\*?\\s*%s\\b",
+        /* C preprocessor */
+        "^\\s*#\\s*define\\s+%s\\b",
+        /* C-like function or method: a type, then the name and "(" (calls have no type before them) */
+        "^\\s*[A-Za-z_][\\w:<>,\\*&\\[\\]\\s]*[\\s\\*&]%s\\s*\\(",
+        /* name at the start of the line: GNU style "type\\nname(", JS/TS class methods "name(...) {" */
+        "^\\s*(?:(?:async|static|get|set|public|private|protected|override)\\s+)*%s\\s*\\([^;]*\\)\\s*(?::\\s*[^{;]+)?\\{?\\s*$",
+        /* the end of "typedef struct { ... } name;" */
+        "^\\s*\\}\\s*%s\\s*[;,]",
+        /* Go methods, JS/TS assignments of functions */
+        "^\\s*(?:func\\s*\\([^)]*\\)\\s*%s\\s*\\(|(?:this\\.|exports\\.|module\\.exports\\.)?%s\\s*[:=]\\s*(?:async\\s+)?(?:function\\b|\\([^)]*\\)\\s*=>|[A-Za-z_$][\\w$]*\\s*=>))",
+    };
+    for (const char *p = name; *p && k < sizeof nm - 2; p++)
+    {
+        if (*p == '$')
+            nm[k++] = '\\';
+        nm[k++] = *p;
+    }
+    nm[k] = 0;
+    for (int i = 0; i < SYM_NRX; i++)
+    {
+        snprintf(pat, sizeof pat, P[i], nm, nm);
+        memset(&rx[i], 0, sizeof rx[i]);
+        if (!rx_compile(&rx[i], pat, 0))
+        {
+            for (int j = 0; j <= i; j++)
+                rx_free(&rx[j]);
+            return 0;
+        }
+    }
+    return 1;
+}
+/* 0 = no definition, 1 = definition, 2 = declaration only (a C prototype ending in ';') */
+static int tx_sym_line(Rx *rx, const char *s, size_t n)
+{
+    static const char *const ctl[] = {"if", "for", "while", "switch", "return", "else", "case", "do", "sizeof", "catch", "new",
+                                      "throw", "await", "yield", "print", "assert", "goto", "delete", "echo", NULL};
+    const char *a = s;
+    size_t e = n;
+    while (a < s + n && (*a == ' ' || *a == '\t'))
+        a++;
+    for (int i = 0; ctl[i]; i++)
+    {
+        size_t L = strlen(ctl[i]);
+        if ((size_t)(s + n - a) >= L && !strncmp(a, ctl[i], L) && (a + L == s + n || !(isalnum((unsigned char)a[L]) || a[L] == '_')))
+            return 0;
+    }
+    for (int i = 0; i < SYM_NRX; i++)
+        if (rx_search(&rx[i], s, n))
+        {
+            while (e && (s[e - 1] == ' ' || s[e - 1] == '\t' || s[e - 1] == '\r'))
+                e--;
+            return (i == 2 && e && s[e - 1] == ';') ? 2 : 1;
+        }
+    return 0;
+}
+
 #endif /* LLAMAC_TEXTOPS_H */

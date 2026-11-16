@@ -38,9 +38,9 @@ static void pend_add(int kind, const char *name, const char *data, const char *m
     pend_status();
 }
 /* clipboard bitmap -> PNG (WIC) -> data URL; NULL on failure. The PNG is much smaller than the raw bitmap. */
-static char *clip_image_png(void)
+/* HBITMAP -> PNG (WIC) -> "data:image/png;base64,..."; NULL on failure. Used by paste and the screenshot tool. */
+static char *hbm_png(HBITMAP hb)
 {
-    HBITMAP hb;
     IWICImagingFactory *fac = NULL;
     IWICBitmap *bmp = NULL;
     IWICBitmapEncoder *enc = NULL;
@@ -49,9 +49,6 @@ static char *clip_image_png(void)
     IStream *st = NULL;
     char *out = NULL;
     HRESULT hc = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
-    if (!OpenClipboard(hMain))
-        goto end;
-    hb = (HBITMAP)GetClipboardData(CF_BITMAP); /* Windows converts CF_DIB / CF_DIBV5 to this */
     if (hb && SUCCEEDED(CoCreateInstance(&CLSID_WICImagingFactory, NULL, CLSCTX_INPROC_SERVER, &IID_IWICImagingFactory, (void **)&fac)) &&
         SUCCEEDED(IWICImagingFactory_CreateBitmapFromHBITMAP(fac, hb, NULL, WICBitmapIgnoreAlpha, &bmp)) &&
         SUCCEEDED(CreateStreamOnHGlobal(NULL, TRUE, &st)) &&
@@ -79,8 +76,6 @@ static char *clip_image_png(void)
             }
         }
     }
-    CloseClipboard();
-end:
     if (props)
         IPropertyBag2_Release(props);
     if (frm)
@@ -95,6 +90,17 @@ end:
         IWICImagingFactory_Release(fac);
     if (SUCCEEDED(hc))
         CoUninitialize();
+    return out;
+}
+/* clipboard bitmap as a PNG data URL (Windows converts CF_DIB / CF_DIBV5 to CF_BITMAP) */
+static char *clip_image_png(void)
+{
+    char *out = NULL;
+    if (OpenClipboard(hMain))
+    {
+        out = hbm_png((HBITMAP)GetClipboardData(CF_BITMAP));
+        CloseClipboard();
+    }
     return out;
 }
 static void add_file(const wchar_t *path);
@@ -160,9 +166,22 @@ static void add_file(const wchar_t *path)
             aud = "audio/mpeg";
         else if (!_wcsicmp(ext, L".wav"))
             aud = "audio/wav";
-        else if (!_wcsicmp(ext, L".pdf"))
-        {
-            set_status("PDF is not supported in this native build (convert to text or images)");
+        else if (doc_kind(name))
+        { /* PDF / DOCX / XLSX: attached as their text */
+            char err[300], *t = doc_text(name, d, len, err, sizeof err);
+            if (t)
+            {
+                char an[300];
+                snprintf(an, sizeof an, "%s (text)", name);
+                pend_add(ATT_TEXT, an, t, "text/plain");
+                free(t);
+            }
+            else
+            {
+                char st[400];
+                snprintf(st, sizeof st, "Cannot attach %s: %s", name, err);
+                set_status(st);
+            }
             free(d);
             free(name);
             return;

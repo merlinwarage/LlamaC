@@ -20,6 +20,8 @@
 #include "src/chat_tree.h"
 #include "src/regex.h"      /* portable: regex + glob for the grep / glob tools */
 #include "src/textops.h"    /* portable: line numbers, edit snippets, grep core */
+#include "src/inflate.h"    /* portable: deflate decoder for ZIP and PDF */
+#include "src/docs.h"       /* portable: text from PDF, DOCX, XLSX */
 #include "src/tools_core.h" /* only needs SB and J, used by request.h and worker.h */
 #include "src/request.h"
 #include "src/chat_io.h"
@@ -48,5 +50,7 @@
 #include "src/mcp_stdio.h"
 #include "src/mcp_http.h"
 #include "src/tools_fs.h"
+#include "src/tools_extra.h" /* system_info, update_plan, ask_user, screenshot */
+#include "src/tools_dlg.h"   /* Built-in tools dialog */
 #include "src/settings_ui.h" /* after the tool modules */
 #include "src/main_window.h"

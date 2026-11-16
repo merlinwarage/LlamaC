@@ -20,6 +20,11 @@ static char *fs_call(const char *tool, J *args);                 /* tools_fs.h *
 static char *fs_preview(const char *tool, J *args);              /* tools_fs.h: diff for the approval dialog */
 static char *fs_run_cmd(const char *cmd, const char *cwdrel, int tmo, int need_shell); /* tools_fs.h */
 static char *guide_call(J *args);                                /* below */
+static char *sysinfo_call(void);                                 /* tools_extra.h */
+static char *plan_call(J *a);
+static char *ask_call(J *a);
+static char *shot_call(J *a);
+static void extra_register(void);
 static char *mcp_call_tool(int srv, const char *rname, J *args); /* mcp.h */
 static char *mem_call(const char *tool, J *args);
 static char *date_call(void);      /* below */
@@ -94,14 +99,40 @@ static int tools_count(int kind)
     return n;
 }
 
+/* name lists "|a|b|" (built-in tools switched off by the user) */
+static int name_in_list(const char *list, const char *name)
+{
+    char k[96];
+    snprintf(k, sizeof k, "|%s|", name);
+    return strstr(list, k) != NULL;
+}
+static void name_list_set(char *list, size_t cap, const char *name, int in)
+{
+    char k[96], *at;
+    snprintf(k, sizeof k, "|%s|", name);
+    while ((at = strstr(list, k)) != NULL) /* remove, keeping the leading '|' */
+        memmove(at, at + strlen(k) - 1, strlen(at + strlen(k) - 1) + 1);
+    if (!strcmp(list, "|"))
+        list[0] = 0;
+    if (in && strlen(list) + strlen(k) < cap)
+    {
+        if (!list[0])
+            strcpy(list, k);
+        else
+            strcat(list, k + 1);
+    }
+}
 /* Tool set 1 ("chat"): no file or shell tools - fewer, cheaper tool definitions and fewer wrong tool choices for
-   small models. MCP tools stay, since the user configured them on purpose. */
+   small models. MCP tools stay, since the user configured them on purpose. Built-in tools the user switched off in
+   the Tools dialog are never sent. */
 static int tool_in_set(const Tool *t)
 {
     if (G.toolset == 2)
         return 0;
+    if (t->kind == 0 && name_in_list(G.tooloff, t->name))
+        return 0;
     if (G.toolset == 1 && t->kind == 0)
-        return !strcmp(t->rname, "get_datetime") || !strncmp(t->rname, "memory_", 7) || !strcmp(t->rname, "read_guide");
+        return !strcmp(t->rname, "get_datetime") || !strncmp(t->rname, "memory_", 7) || !strcmp(t->rname, "read_guide") || !strcmp(t->rname, "ask_user");
     return 1;
 }
 /* "tools" array for the chat completion request (NULL = send no tools) */
@@ -169,7 +200,23 @@ static int ask_approval(const Tool *t, const char *args, int *always)
         sb_puts(&c, cw && *cw ? cw : ".");
         j_free(aj);
     }
-    else if (!t->kind && (!strcmp(t->rname, "edit_file") || !strcmp(t->rname, "write_file") || !strcmp(t->rname, "delete_file")))
+    else if (!t->kind && !strcmp(t->rname, "screenshot"))
+    {
+        J *aj = json_parse(args);
+        const char *wn = j_str(j_get(aj, "window"));
+        sb_puts(&c, "\n\nThe model wants to see ");
+        if (wn && *wn)
+        {
+            sb_puts(&c, "the window whose title contains \"");
+            sb_puts(&c, wn);
+            sb_puts(&c, "\".");
+        }
+        else
+            sb_puts(&c, "your whole primary screen.");
+        sb_puts(&c, "\n\nThe image is sent to the model and saved in this chat. Check that nothing confidential is visible.");
+        j_free(aj);
+    }
+    else if (!t->kind && (!strcmp(t->rname, "edit_file") || !strcmp(t->rname, "write_file") || !strcmp(t->rname, "delete_file") || !strcmp(t->rname, "multi_edit")))
     { /* show what would change instead of raw JSON */
         J *aj = json_parse(args);
         const char *pth = j_str(j_get(aj, "path"));
@@ -234,8 +281,8 @@ static int ask_approval(const Tool *t, const char *args, int *always)
 static int tool_allowed(const Tool *t, const char *args)
 {
     int always = 0;
-    if (G.autoappr || t->ro || t->allow)
-        return 1;
+    if (t->allow || ((G.autoappr || t->ro) && !(t->kind == 0 && !strcmp(t->rname, "screenshot"))))
+        return 1; /* a screenshot asks even with auto-approve: the screen can show anything */
     if (!ask_approval(t, args, &always))
         return 0;
     if (always)
@@ -269,6 +316,8 @@ static char *tool_execute(const char *name, const char *args)
         return xstrdup("Error: unknown tool");
     if (!G.tools_on)
         return xstrdup("Error: tools are disabled in Settings");
+    if (t.kind == 0 && name_in_list(G.tooloff, t.name))
+        return xstrdup("Error: the user has switched this tool off. Do not call it again; continue without it.");
     if (!tool_allowed(&t, args))
         return xstrdup("The user denied this tool call.");
     a = (args && *args) ? json_parse_strict(args) : NULL;
@@ -310,6 +359,14 @@ static char *tool_execute(const char *name, const char *args)
         res = mem_call(t.rname, a);
     else if (t.kind == 0 && !strcmp(t.rname, "read_guide"))
         res = guide_call(a);
+    else if (t.kind == 0 && !strcmp(t.rname, "system_info"))
+        res = sysinfo_call();
+    else if (t.kind == 0 && !strcmp(t.rname, "update_plan"))
+        res = plan_call(a);
+    else if (t.kind == 0 && !strcmp(t.rname, "ask_user"))
+        res = ask_call(a);
+    else if (t.kind == 0 && !strcmp(t.rname, "screenshot"))
+        res = shot_call(a);
     else
         res = t.kind == 0 ? fs_call(t.rname, a) : mcp_call_tool(t.srv, t.rname, a);
     if (!res)
@@ -330,7 +387,7 @@ static int tool_is_ro(const char *name)
 }
 static int tool_changes_files(const char *name)
 {
-    static const char *w[] = {"write_file", "edit_file", "move_path", "delete_file", "create_directory", NULL};
+    static const char *w[] = {"write_file", "edit_file", "multi_edit", "move_path", "delete_file", "create_directory", NULL};
     for (int i = 0; w[i]; i++)
         if (!strcmp(name, w[i]))
             return 1;
@@ -484,12 +541,26 @@ static DWORD WINAPI tool_runner(LPVOID arg)
         SB m = {0};
         if (!res[i])
             break; /* stopped before this call ran */
+        char *img = NULL;
+        if (!strncmp(res[i], "\x01IMAGE ", 7) && strchr(res[i], '\n'))
+        { /* an image result: the image is kept apart, only the text is capped */
+            char *nl = strchr(res[i], '\n'), *tx = xstrdup(nl + 1);
+            img = xstrndup(res[i], (size_t)(nl - res[i]));
+            free(res[i]);
+            res[i] = tx;
+        }
         res[i] = tool_cap(res[i], r->cap, nms[i]);
         utf8_sanitize(res[i]);
         sb_puts(&m, ids[i] ? ids[i] : "");
         sb_putc(&m, '\n');
         sb_puts(&m, nms[i]);
         sb_putc(&m, '\n');
+        if (img)
+        {
+            sb_puts(&m, img);
+            sb_putc(&m, '\n');
+            free(img);
+        }
         sb_puts(&m, res[i]);
         post_msg(6, sbs(&m));
         free(m.p);
@@ -660,6 +731,7 @@ static void tools_apply_settings(void)
     mem_register();
     date_register();
     guides_register();
+    extra_register();
     if (G.tools_on && !g_mcp_started)
         mcp_start_async();
 }
@@ -669,6 +741,7 @@ static void tools_startup(void)
     mem_register();
     date_register();
     guides_register();
+    extra_register();
     if (G.tools_on)
         mcp_start_async();
 }

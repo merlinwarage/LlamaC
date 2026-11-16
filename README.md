@@ -20,8 +20,11 @@
 - **Edit a reply and continue.** Correct the model's answer and let it go on from your text, as a new branch. This also continues a reply that hit the token limit.
 - **Token confidence.** Words the model was unsure about are shaded. Click one to see the alternatives and continue from another choice.
 - **File checkpoints.** Files changed by tools are saved first. Going back to an earlier message can restore them.
-- **Attachments.** Images, audio (`.mp3`, `.wav`) and text files, via the button, drag and drop onto the window, the input box or the chat view, a long paste that becomes an attachment, or **Ctrl+V of a screenshot or of files copied in Explorer**.
+- **Attachments.** Images, audio (`.mp3`, `.wav`), text files and **PDF / DOCX / XLSX** (attached as their text), via the button, drag and drop onto the window, the input box or the chat view, a long paste that becomes an attachment, or **Ctrl+V of a screenshot or of files copied in Explorer**.
 - **Message queue.** Press Enter while the model is working, and the message is sent when the reply is complete.
+- **Tool and MCP switches.** The **Tools** and **MCP** buttons in the input box switch single built-in tools and whole MCP servers on or off, with the token cost of each tool shown.
+- **Documents.** PDF, DOCX and XLSX are read as text, by the file tools and as attachments, with no other software installed.
+- **KV cache per chat.** With llama-server's `--slot-save-path`, switching back to a long chat restores its cache instead of processing it again.
 - **Server-default aware settings.** Sampling parameters left empty are _not sent_, so llama-server's own values apply. Settings are read from `GET /props`.
 - **Full sampling control:** temperature, top-k, top-p, min-p, repeat/presence/frequency penalty, DRY, max tokens, seed, stop strings.
 - **Advanced:** Jinja `chat_template_kwargs`, `reasoning_format`, extra request JSON, and a **Jinja template viewer** (`POST /apply-template`).
@@ -41,15 +44,15 @@
 
 ## Settings
 
-Settings are grouped into sections: **Connection**, **Chat template**, **Display**, **Sampling**, **Tools & memory** and **Context & compression**. Hover any label or field for an explanation of what it does and what an empty value or `0` means.
+Settings are grouped into sections: **Connection**, **Chat template & profiles**, **Context & compression**, **Sampling**, **Tools & memory** and **Display**. Hover any label or field for an explanation of what it does and what an empty value or `0` means. Folder fields (root folder, KV slot folder) have a **...** button that opens a folder picker.
 
 Sampling fields left empty are not sent, so llama-server's own values apply. The grey hint in each box shows the server value. **Reset sampling** clears all sampling overrides.
 
-The **System prompt** can hold up to 4095 bytes (accented characters take 2 bytes). **Save** and **Delete** next to the name box keep named prompts in `data\prompts.json`. To change the limit, edit the size of `sys` in `src/config.h` and rebuild. Model names of any length are supported.
+The **System prompt** can hold up to 4095 bytes (accented characters take 2 bytes). **Save** and **Delete** next to the name box keep named **profiles** in `data\prompts.json`. A profile stores the prompt together with the reminder, tool set, the built-in tools switched off, temperature, top-k, top-p, min-p, think budget and template kwargs. To change the prompt limit, edit the size of `sys` in `src/config.h` and rebuild. Model names of any length are supported.
 
 ## Tools: file access and MCP
 
-Tools are sent to the model in the `tools` field of each chat request, so you don't need to mention them in the system prompt. The model decides when to call one. Every call shows an approval dialog (**Allow once**, **Always allow this tool (until restart)**, **Deny**) unless the tool is read-only or auto-approved. Up to **Max tool rounds** calls are chained per message.
+Tools are sent to the model in the `tools` field of each chat request, so you don't need to mention them in the system prompt. The model decides when to call one. Every call shows an approval dialog (**Allow once**, **Always allow this tool (until restart)**, **Deny**) unless the tool is read-only or auto-approved. The exception is `screenshot`, which always asks. Up to **Max tool rounds** (default 25) calls are chained per message.
 
 Turn everything on or off with **Enable tools** in Settings. The model must support tool calling and the server must run with `--jinja`.
 
@@ -72,6 +75,9 @@ Turn everything on or off with **Enable tools** in Settings. The model must supp
 | `move_path`        | Move or rename a file or folder               | yes        |
 | `delete_file`      | Delete one file                               | yes        |
 | `run_command`      | Run a `cmd.exe` command, return its output    | yes        |
+| `multi_edit`       | Several replacements in one file, all or nothing | yes     |
+| `find_symbol`      | Where a function, class, type or macro is defined | no     |
+| `summarize_file`   | Summarize a long file in a separate model call | no        |
 
 - The tools are limited to the **Root folder** set in Settings (type it or pick it with **...**). Paths are resolved to their real location, so links and junctions cannot escape the root. With no root folder there are no file tools.
 - Write, move and delete tools only exist when **Allow file write / edit tools** is ticked.
@@ -83,7 +89,42 @@ Turn everything on or off with **Enable tools** in Settings. The model must supp
 - **Verify command** (Settings): runs after every tool round that changed files, for example `build.bat` or `npm test`. Its output is added to the tool result, so the model sees build errors straight away. It runs in the root folder without asking, because it is your own command.
 - Read-only tools called together in one round run in parallel.
 - Tool results are capped at 60,000 characters, and at about 40% of the free context (shared by the calls of one round). Command output keeps its end, where errors are; other output keeps its beginning. ANSI colours, progress redraws and repeated warning lines are removed from command output.
-- **Tool set** (Settings, or per profile): *All tools*, *Chat* (date, memory, guides and MCP only) or *None*.
+- **Tool set** (Settings, or per profile): *All tools*, *Chat* (date, memory, guides, `ask_user` and MCP only) or *None*.
+- `read_file`, `summarize_file` and attachments read **PDF, DOCX and XLSX** as text, using a built-in decompressor and parsers (no other software needed):
+  - **PDF:** text per page (`--- page N ---`). Handles compressed streams, object streams and ToUnicode font maps.
+  - **Word:** paragraphs, with headings as `#`, list items as `-`, and table cells separated by `|`.
+  - **Excel:** every sheet, one line per row (`12: A12 | B12 | ...`).
+
+  Not supported: scanned PDFs (no text layer; llamac says so), encrypted PDFs, and the old `.doc` / `.xls` formats.
+- `multi_edit` applies all its edits in memory first. If one does not match, nothing is written and the error names that edit. The approval dialog shows the diff of all edits together.
+- `find_symbol` finds definitions, not uses, in C/C++, C#, Java, JS/TS, Python, Go, Rust and similar languages. It recognises functions, methods, classes, structs, typedefs, `#define`s and `const`/`let` assignments. Declarations (C prototypes) are marked.
+- `summarize_file` sends the file, or for long files up to 12 parts followed by a merge step, to the model in separate requests. Only the summary enters the conversation. **Summary budget** caps the model's thinking. With **Keep KV cache per chat**, the chat's cache is moved to another slot, or saved and restored, around the summary.
+
+### Other built-in tools
+
+| Tool          | Purpose | Asks first |
+| ------------- | ------- | ---------- |
+| `system_info` | Windows version, CPU, RAM, GPU, drives, locale and the developer tools found on PATH (no user or computer names) | no |
+| `ask_user`    | The model asks you a question, with up to 8 answers to click or your own text, instead of guessing | no (it is a question to you) |
+| `update_plan` | The model keeps a checklist for a multi-step task. The chat shows it with ☑ done, ▶ current and ☐ pending | no |
+| `screenshot`  | The model sees the screen or one window (by title). Only for vision models; the image is downscaled to 1280 px wide | **always**, even with auto-approve |
+
+`screenshot` exists only when **Allow screenshot tool** is ticked (off by default). The screen can show anything, including personal or confidential data, so every capture asks first. The image is saved in the chat with the tool result. It is sent to the model as a user message right after the tool results, because tool results can only carry text.
+- **Choosing a window:** the window is chosen by text in its title (LlamaC's own window included).
+- **No match:** the model is told only that nothing matched. The titles of your other open windows are never listed to it, because they can name documents, sites or customers.
+- **Tested** with a vision model (LFM3-VL 2B): it listed the buttons of the captured window correctly. That request used about 1,400 prompt tokens.
+
+### Switching built-in tools on and off
+
+The **Tools 18/21** button in the input box (and **Built-in tools...** in Settings) opens a list of the built-in tools available with the current settings. Each row shows a checkbox, the tool's purpose and its approximate cost in tokens per request, and a total at the bottom. Hover the name or the shortened purpose to see the full description.
+- **Unticked tools** are not sent to the model. If the model still calls one, for example because it saw it earlier in the chat, the call is refused.
+- **Saved** in the settings, and in a profile when you **Save** the profile. A coding profile can keep the file tools, while a chat profile drops them.
+- **The estimate** uses the model's measured characters per token. For a model not used yet it is rough until the first reply.
+- **Tested:** unticking `list_directory`, `read_file` and `search_files` lowered the tool definitions from 2,070 to 1,727 tokens (server tokenizer).
+
+MCP tools are switched per server with the **MCP** button. **Tool set** still applies on top: with *Chat* or *None*, fewer tools are sent, whatever is ticked.
+
+Every built-in tool definition costs tokens in every request. In a new chat with Tool set *All*, the prompt grew by roughly 700 tokens with these tools; that figure comes from prompt sizes and includes two small test MCP servers. Use Tool set *Chat* or *None* when you do not need them.
 
 ### Guides
 
@@ -125,7 +166,7 @@ Click **Edit MCP servers...** in Settings to open the built-in `mcp.json` editor
 
 MCP tools appear to the model as `servername__toolname`.
 
-**Switching servers on and off:** the **MCP 2/3** button next to the attach button in the input box lists the servers in `mcp.json` with a check mark (and their tool count, or the error if one failed to start). Clicking a server stops it - its process ends and its tools are no longer sent - or starts it again; the menu stays open so several can be switched. The choice is kept in llamac's settings across restarts, `mcp.json` is not changed. Servers with `"disabled": true` in `mcp.json` are shown greyed. The menu also has **Reload all servers** and **Edit mcp.json**. Servers cannot be switched while a reply is being generated. Stdio servers run inside a Windows job object, so the whole process tree is killed when llamac closes.
+**Switching servers on and off:** the **MCP 2/3** button in the input box lists the servers in `mcp.json` with a check mark (and their tool count, or the error if one failed to start). Clicking a server stops it - its process ends and its tools are no longer sent - or starts it again; the menu stays open so several can be switched. The choice is kept in llamac's settings across restarts, `mcp.json` is not changed. Servers with `"disabled": true` in `mcp.json` are shown greyed. The menu also has **Reload all servers** and **Edit mcp.json**. Servers cannot be switched while a reply is being generated. Stdio servers run inside a Windows job object, so the whole process tree is killed when llamac closes.
 
 ## Long-term memory
 
@@ -162,7 +203,7 @@ With **Auto-compress when context is low** ticked, llamac keeps long chats withi
 
 Small (9B-35B) models lose track of instructions in long contexts, choose wrong tools when they have many, and often get whitespace wrong when editing. These settings address that:
 
-- **Tool set** *Chat* or *None* for conversations that need no files: the file tool definitions alone are about 1.5k tokens per request.
+- **Tool set** *Chat* or *None* for conversations that need no files: with every built-in tool on, the tool definitions take about 2k tokens per request. The **Tools** button shows the cost of each tool and switches single tools off.
 - **Reminder** (in a profile): a line such as "Answer in Hungarian. Keep it short." is appended to your latest message when it is sent. It is not stored, and the prompt cache stays valid.
 - **Guides** instead of a long system prompt (see [Guides](#guides)).
 - **Think budget** (sampling) and **Summary budget** limit reasoning tokens (`reasoning_budget_tokens`, recent llama-server builds).
@@ -181,9 +222,9 @@ Recent llama-server builds also keep a prompt cache in RAM across chats. While a
 
 ## Build
 
-Requirements: Visual Studio 2022 (MSVC) on x64 Windows. No third-party libraries.
+Requirements: Visual Studio 2022 (MSVC) on x64 Windows; the VS 2019 Build Tools work too. No third-party libraries.
 
-Open **x64 Native Tools Command Prompt for VS 2022** and run `build.bat`.
+Open **x64 Native Tools Command Prompt for VS 2022** (or the 2019 Build Tools' x64 prompt) and run `build.bat`.
 
 Link libraries are pulled in through `#pragma comment`. `build.bat` also embeds the application manifest (`/MANIFEST:EMBED`), which enables Common Controls v6. Without it, tooltips, grey hint text and themed controls do not appear. If you build by hand, keep those flags:
 
@@ -229,6 +270,10 @@ src/
   json.h            tiny JSON DOM parser
   config.h          settings struct, field table, serialisation
   chat_tree.h       conversation tree, attachments
+  regex.h           linear-time regex and glob matcher (grep, glob, find_symbol)
+  textops.h         text helpers: edits, diff, log folding, BM25, symbol patterns
+  inflate.h         DEFLATE decoder for ZIP and PDF streams
+  docs.h            text from PDF, DOCX and XLSX
   tools_core.h      JSON dump, streamed tool_calls accumulator, UTF-8 sanitiser
   request.h         request body and /apply-template builders
   chat_io.h         WebUI-compatible import/export
@@ -252,7 +297,9 @@ src/
   mcp.h             MCP client core, mcp.json loading, built-in editor
   mcp_stdio.h       MCP over stdio (pipes, job object)
   mcp_http.h        MCP over Streamable HTTP (WinHTTP, SSE)
-  tools_fs.h        sandboxed file tools
+  tools_fs.h        sandboxed file tools, multi_edit, find_symbol, summarize_file
+  tools_extra.h     system_info, update_plan, ask_user, screenshot
+  tools_dlg.h       Built-in tools dialog
   settings_ui.h     settings dialog and profiles
   main_window.h     window procedure, layout, context gauge, WinMain
   compact.h         chat compression (tool-result stubs, streaming summary)
@@ -261,17 +308,22 @@ src/
   modelstats.h      per-model statistics and characters-per-token calibration
 tests/
   textops_tests.c   whitespace-tolerant edit, log folding, diff, BM25
-  request_tests.c   request building: stubs, reminder, fitting, logprobs, prefill
+  request_tests.c   request building: stubs, reminder, fitting, logprobs, prefill, tool images
+  docs_tests.c      inflate, PDF / DOCX / XLSX text (fixtures from make_doc_fixtures.py)
+  make_doc_fixtures.py  writes the test documents (Python standard library only)
 ```
 
-The portable modules (`util`, `json`, `config`, `chat_tree`, `tools_core`, `request`) use no Windows APIs. The tests build with `cl /nologo /W3 /utf-8 tests\textops_tests.c` (and `request_tests.c`) and need no Windows UI.
+The portable modules (`util`, `json`, `config`, `chat_tree`, `regex`, `textops`, `inflate`, `docs`, `tools_core`, `request`, `chat_io`) use no Windows APIs. The tests build with `cl /nologo /W3 /utf-8 tests\textops_tests.c` (likewise `request_tests.c` and `docs_tests.c`) and need no Windows UI. `docs_tests` needs `python tests\make_doc_fixtures.py <folder>` first. It also checks `<folder>\browser.pdf` if present, a page printed with `msedge --headless --print-to-pdf`.
+
+For developers: building with `/DLLAMAC_TOOLTEST` adds `llamac.exe --tool <name> <args.json> <out.txt>`. It runs one built-in tool with the saved settings, without approval dialogs, and writes the result to a file. Release builds do not contain it.
 
 ## How it talks to the server
 
 | Endpoint                    | Purpose                                                                                 |
 | --------------------------- | --------------------------------------------------------------------------------------- |
-| `POST /v1/chat/completions` | Streaming chat (`stream: true`, `timings_per_token: true`, `return_progress: true`) and the streaming summary |
-| `GET /props`                | Reads server default sampling values and the context size                               |
+| `POST /v1/chat/completions` | Streaming chat (`stream: true`, `timings_per_token: true`, `return_progress: true`), the compression summary and `summarize_file` |
+| `GET /v1/models`            | The model list                                                                          |
+| `GET /props`                | Server default sampling values, context size, vision support and slot count            |
 | `POST /apply-template`      | Renders the chat template without running inference                                     |
 | `POST /tokenize`            | Token counts in the context window                                                     |
 | `POST /slots/0?action=save` / `restore` | KV cache per chat (optional, needs `--slot-save-path`)                     |
@@ -284,13 +336,17 @@ Only parameters you set in the client are included in the request. When tools ar
 - MCP servers are programs you start. Only add servers you trust.
 - `Auto-approve ALL tool calls` skips every prompt, including writes, deletes and shell commands. Combined with the shell tool, the model can run any command without asking.
 - Links in model output are only opened when you click them, and only `http`, `https` and `mailto` links.
+- `screenshot` is off by default and asks before every capture, even with auto-approve. The image is kept in the chat file.
+- The **Verify command** runs without asking after file changes, because you typed it yourself. Choose it with care.
+- With a **KV slot folder** set, llamac deletes files in that folder, but only ones named `llamac-*.bin`.
+- File checkpoints (`data\checkpoints\`) keep earlier versions of changed files. Delete a chat to remove its checkpoints.
 
 ## Limitations
 
 - Windows only (Win32, WinHTTP, RichEdit, DWM).
 - Tools need a model with tool-calling support and `llama-server --jinja`.
 - MCP support covers tools only (no resources, prompts or sampling), and server-initiated requests other than `ping` are declined.
-- PDF attachments are not supported. Convert them to text or images first.
+- PDF, DOCX and XLSX are read as text only: no OCR for scanned PDFs, no images, no layout beyond lines, paragraphs, table cells and rows. Encrypted PDFs and the old `.doc` / `.xls` formats are not supported.
 - Token confidence works only in requests without tools (a llama-server restriction).
 - Attachments are limited to 100 MB per file.
 - Markdown rendering is a lightweight subset, not a full CommonMark implementation.

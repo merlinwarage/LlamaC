@@ -29,6 +29,7 @@
 #pragma comment(lib, "winmm.lib")
 #pragma comment(lib, "windowscodecs.lib")
 #pragma comment(lib, "uuid.lib")
+#pragma comment(lib, "advapi32.lib")
 #pragma comment(lib, "winhttp.lib")
 #pragma comment(lib, "comdlg32.lib")
 #pragma comment(lib, "user32.lib")
@@ -85,7 +86,9 @@ enum
     IDC_TOOLSET,
     IDC_BROWSE_FS,
     IDC_BROWSE_KV,
-    IDC_MCPBTN
+    IDC_MCPBTN,
+    IDC_TOOLSBTN,
+    IDC_TOOLSDLG
 };
 #define WM_APP_MSG (WM_APP + 1)
 #define WM_APP_INIT (WM_APP + 2)
@@ -122,7 +125,9 @@ static RECT rcSide, rcSearch, rcHead, rcBox, rcTitle;
 static RECT rcGauge; /* context gauge right of the status line (click: context window) */
 static WNDPROC oldInput;
 static const wchar_t *FACE = L"Segoe UI", *MONO = L"Consolas";
-static int g_nctx; /* context window from /props, 0 = unknown */
+static int g_nctx;   /* context window from /props, 0 = unknown */
+static int g_vision; /* the model accepts images (/props modalities) */
+static int g_nslots; /* server slots (/props total_slots), 0 = unknown */
 static int g_last_prompt_n, g_last_pred_n;
 static int g_compacting;
 #define PT 10
