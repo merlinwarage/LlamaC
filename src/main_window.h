@@ -4,6 +4,39 @@
 
 /* ---------- main window ---------- */
 static int g_gauge_last = -1;
+#define DOCK_H 48        /* composer row: buttons, input (1 line) and Send are this tall */
+static int g_boxH = DOCK_H; /* input box height: grows with the text, up to 6 lines */
+static int g_lineH = 20;
+/* width of a text button in the actions row */
+static int act_w(int id)
+{
+    wchar_t t[64];
+    SIZE sz = {0};
+    HDC dc = GetDC(hMain);
+    HGDIOBJ old = SelectObject(dc, hFontS);
+    GetWindowTextW(B(id), t, 64);
+    GetTextExtentPoint32W(dc, t, (int)wcslen(t), &sz);
+    SelectObject(dc, old);
+    ReleaseDC(hMain, dc);
+    return sz.cx + 20;
+}
+/* the input box grows with its text (1 to 6 lines) */
+static void input_autosize(void)
+{
+    int lines = (int)SendMessageW(hInput, EM_GETLINECOUNT, 0, 0), want;
+    if (lines < 1)
+        lines = 1;
+    if (lines > 6)
+        lines = 6;
+    want = lines * g_lineH + 26;
+    if (want < DOCK_H)
+        want = DOCK_H;
+    if (want != g_boxH)
+    {
+        g_boxH = want;
+        layout();
+    }
+}
 static LRESULT CALLBACK InputProc(HWND h, UINT m, WPARAM w, LPARAM l)
 {
     if (m == WM_CHAR)
@@ -45,6 +78,13 @@ static LRESULT CALLBACK InputProc(HWND h, UINT m, WPARAM w, LPARAM l)
                 GlobalUnlock(g);
         }
         CloseClipboard();
+    }
+    if (m == WM_SETTEXT)
+    { /* a multi-line edit sends no EN_CHANGE for text set by code (Edit last, queue, Send): resize the box here */
+        LRESULT r = CallWindowProcW(oldInput, h, m, w, l);
+        PostMessageW(hMain, WM_COMMAND, MAKEWPARAM(IDC_INPUT, EN_CHANGE), (LPARAM)h);
+        attach_badge_refresh();
+        return r;
     }
     return CallWindowProcW(oldInput, h, m, w, l);
 }
@@ -88,37 +128,52 @@ static void layout(void)
         cw = 300;
     int left = x0 + (Wr - cw) / 2;
     g_colw = cw;
-    int boxH = 84, statusH = 22, actH = 36;
-    int yStatus = H - statusH - 8, yBox = yStatus - boxH - 6, yAct = yBox - actH - 2;
-    MoveWindow(hChat, x0, 60, Wr, yAct - 64, TRUE);
+    /* bottom dock, from the bottom up: status line + gauge, composer row (button group | input | Send), actions row,
+       then a divider line above which the chat ends */
+    int statusH = 20, actH = 30, boxH = g_boxH;
+    int yStatus = H - statusH - 6, yBox = yStatus - 8 - boxH, yRow = yBox + boxH - DOCK_H, yAct = yBox - 8 - actH;
+    g_ydock = yAct - 7;
+    MoveWindow(hChat, x0, 60, Wr, g_ydock - 60, TRUE);
     {
         int m = (Wr - cw) / 2;
         SendMessageW(hChat, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, MAKELONG(m, m));
     }
-    {
-        const int ids[] = {IDC_REGEN, IDC_EDIT, IDC_EDITREPLY, IDC_DELM, IDC_PREV, IDC_NEXT, IDC_COPY, IDC_DELC};
-        const int wd[] = {96, 84, 88, 92, 36, 36, 56, 92};
-        int x = left;
+    { /* actions row: [Regenerate Edit last Edit reply] | [< >] | [Copy] ...... [Delete msg Delete chat] */
+        const int lids[] = {IDC_REGEN, IDC_EDIT, IDC_EDITREPLY, 0, IDC_PREV, IDC_NEXT, 0, IDC_COPY};
+        int x = left - 6, dv = 0;
+        g_actdiv_y = yAct + actH / 2;
         for (int i = 0; i < 8; i++)
         {
-            MoveWindow(B(ids[i]), x, yAct + 2, wd[i], 32, TRUE);
-            x += wd[i] + 4;
+            int wdt;
+            if (!lids[i])
+            { /* a divider between groups */
+                g_actdiv[dv++] = x + 6;
+                x += 13;
+                continue;
+            }
+            wdt = (lids[i] == IDC_PREV || lids[i] == IDC_NEXT) ? 30 : act_w(lids[i]);
+            MoveWindow(B(lids[i]), x, yAct + 2, wdt, actH - 4, TRUE);
+            x += wdt + 2;
+        }
+        {
+            int w2 = act_w(IDC_DELC), w1 = act_w(IDC_DELM), xr = left + cw + 6;
+            MoveWindow(B(IDC_DELC), xr - w2, yAct + 2, w2, actH - 4, TRUE);
+            MoveWindow(B(IDC_DELM), xr - w2 - 2 - w1, yAct + 2, w1, actH - 4, TRUE);
         }
     }
-    SetRect(&rcBox, left, yBox, left + cw, yBox + boxH);
-    MoveWindow(B(IDC_ATTACH), left + 10, yBox + (boxH - 38) / 2, 38, 38, TRUE);
-    if (G.tools_on)
-    { /* MCP server switch next to the attach button */
-        MoveWindow(B(IDC_TOOLSBTN), left + 52, yBox + (boxH - 38) / 2, 86, 38, TRUE);
-        MoveWindow(B(IDC_MCPBTN), left + 142, yBox + (boxH - 38) / 2, 74, 38, TRUE);
-        MoveWindow(hInput, left + 224, yBox + 14, cw - 224 - 100, boxH - 28, TRUE);
+    { /* composer row: [+ | T | M] [input .........] [Send] - all DOCK_H tall; the input grows upwards */
+        int nb = G.tools_on ? 3 : 1, gw = nb * 42 + 2;
+        const int gids[] = {IDC_ATTACH, IDC_TOOLSBTN, IDC_MCPBTN};
+        SetRect(&rcTools, left, yRow, left + gw, yRow + DOCK_H);
+        for (int i = 0; i < nb; i++)
+            MoveWindow(B(gids[i]), left + 3 + i * 42, yRow + 4, 38, DOCK_H - 8, TRUE);
+        SetRect(&rcBox, left + gw + 8, yBox, left + cw - DOCK_H - 8, yBox + boxH);
+        MoveWindow(hInput, rcBox.left + 14, yBox + 13, rcBox.right - rcBox.left - 28, boxH - 24, TRUE);
+        MoveWindow(B(IDC_SEND), left + cw - DOCK_H, yRow, DOCK_H, DOCK_H, TRUE);
     }
-    else
-        MoveWindow(hInput, left + 60, yBox + 14, cw - 60 - 100, boxH - 28, TRUE);
-    MoveWindow(B(IDC_SEND), left + cw - 88, yBox + (boxH - 38) / 2, 78, 38, TRUE);
-    MoveWindow(hStatus, left, yStatus, cw - 186, 20, TRUE);
+    MoveWindow(hStatus, left + 4, yStatus + 1, cw - 190, 18, TRUE);
     SetRect(&rcGauge, left + cw - 176, yStatus + 1, left + cw, yStatus + 19);
-    RedrawWindow(hMain, NULL, NULL, RDW_INVALIDATE | RDW_ERASE);
+    RedrawWindow(hMain, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW);
 }
 /* how full the context is: measured tokens of the last request (plus anything added since) / context size */
 static void paint_gauge(HDC dc)
@@ -200,7 +255,25 @@ static void paint_main(HWND h)
         DrawTextW(dc, w, -1, &rcTitle, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
         free(w);
     }
-    rrect(dc, &rcBox, 26, cSurf, cBorder);
+    { /* the bottom dock */
+        HBRUSH lb = CreateSolidBrush(cBorder);
+        RECT dl = {rcHead.left, g_ydock, rcHead.right, g_ydock + 1};
+        FillRect(dc, &dl, lb);
+        for (int i = 0; i < 2; i++)
+        { /* group dividers in the actions row */
+            RECT v = {g_actdiv[i], g_actdiv_y - 7, g_actdiv[i] + 1, g_actdiv_y + 7};
+            FillRect(dc, &v, lb);
+        }
+        rrect(dc, &rcTools, 14, cSurf, cBorder);
+        if (G.tools_on)
+            for (int i = 1; i < 3; i++)
+            { /* thin separators between + / T / M */
+                RECT v = {rcTools.left + 1 + i * 42, rcTools.top + 12, rcTools.left + 2 + i * 42, rcTools.bottom - 12};
+                FillRect(dc, &v, lb);
+            }
+        DeleteObject(lb);
+    }
+    rrect(dc, &rcBox, 14, cSurf, cBorder);
     paint_gauge(dc);
     EndPaint(h, &ps);
 }
@@ -253,6 +326,33 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l)
         mkbtn(h, L"MCP", IDC_MCPBTN);
         mkbtn(h, L"Tools", IDC_TOOLSBTN);
         mkbtn(h, L"Send", IDC_SEND);
+        hFontS = CreateFontW(-13, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Segoe UI");
+        hFontI = CreateFontW(-17, 0, 0, 0, FW_SEMIBOLD, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Segoe UI");
+        hFontXS = CreateFontW(-10, 0, 0, 0, FW_SEMIBOLD, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Segoe UI");
+        hFontSym = CreateFontW(-16, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Segoe UI Symbol");
+        {
+            HDC dc = GetDC(hInput);
+            TEXTMETRICW tm;
+            HGDIOBJ old = SelectObject(dc, hFont);
+            GetTextMetricsW(dc, &tm);
+            g_lineH = tm.tmHeight + tm.tmExternalLeading;
+            SelectObject(dc, old);
+            ReleaseDC(hInput, dc);
+        }
+        g_mtt = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, NULL, WS_POPUP | TTS_NOPREFIX | TTS_ALWAYSTIP, CW_USEDEFAULT, CW_USEDEFAULT,
+                                CW_USEDEFAULT, CW_USEDEFAULT, h, NULL, NULL, NULL);
+        if (g_mtt)
+        {
+            SendMessageW(g_mtt, TTM_SETMAXTIPWIDTH, 0, 360);
+            if (G.dark)
+                SetWindowTheme(g_mtt, L"DarkMode_Explorer", NULL);
+        }
+        main_tip(B(IDC_ATTACH), "Attach files: images, audio, text, PDF, DOCX, XLSX. You can also drop files here or paste with Ctrl+V.");
+        main_tip(B(IDC_SEND), "Send (Enter). Shift+Enter starts a new line. While the model works this is Stop, and Enter queues your message.");
+        main_tip(B(IDC_PREV), "Previous branch of this conversation");
+        main_tip(B(IDC_NEXT), "Next branch of this conversation");
+        main_tip(B(IDC_EDITREPLY), "Edit the last reply and let the model continue from your text");
+        main_tip(B(IDC_DELM), "Delete the last message");
         /* drops also work when the app runs elevated (UIPI would otherwise block them from Explorer) */
         ChangeWindowMessageFilterEx(h, WM_DROPFILES, MSGFLT_ALLOW, NULL);
         ChangeWindowMessageFilterEx(h, 0x0049 /* WM_COPYGLOBALDATA */, MSGFLT_ALLOW, NULL);
@@ -421,7 +521,11 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l)
             return 0;
         }
         if (id == IDC_INPUT)
+        {
+            if (nt == EN_CHANGE)
+                input_autosize();
             return 0;
+        }
         if (id == IDC_MODEL && nt == CBN_SELCHANGE)
         {
             int s = (int)SendMessageW(hModel, CB_GETCURSEL, 0, 0);

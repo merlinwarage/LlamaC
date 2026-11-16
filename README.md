@@ -1,38 +1,84 @@
 # LlamaC
 
-**A native Win32 client for [llama-server](https://github.com/ggml-org/llama.cpp) written in pure C.** A single small `.exe`, no runtime, no Electron, no browser. It aims to feel like the llama.cpp WebUI. `Only 4MB of memory usage`.
+**A lightweight, native Windows client for [`llama-server`](https://github.com/ggml-org/llama.cpp), written in pure C.**
 
-![language](https://img.shields.io/badge/language-C-blue) ![platform](https://img.shields.io/badge/platform-Windows%2010%2F11-0078D6) ![deps](https://img.shields.io/badge/dependencies-none-brightgreen) ![version](https://img.shields.io/badge/version-3.0.0-lightgrey)
+LlamaC is a single, portable `.exe` with no runtime, Electron, or browser dependency. It aims to provide an experience similar to the llama.cpp WebUI while using **about 4 MB of memory**.
 
-<img src="docs/main.png" alt="Console" width="49%"> <img src="docs/settings.png" alt="Config" width="49%">
+![Language: C](https://img.shields.io/badge/language-C-blue)
+![Platform: Windows 10/11](https://img.shields.io/badge/platform-Windows%2010%2F11-0078D6)
+![Dependencies: none](https://img.shields.io/badge/dependencies-none-brightgreen)
+![Version: 3.0.0](https://img.shields.io/badge/version-3.0.0-lightgrey)
+
+<p align="center">
+  <img src="docs/main.png" alt="LlamaC chat window" width="49%">
+  <img src="docs/settings.png" alt="LlamaC settings window" width="49%">
+</p>
+
+## Contents
+
+- [Features](#features)
+- [Quick start](#quick-start)
+- [Settings](#settings)
+- [Tools: file access and MCP](#tools-file-access-and-mcp)
+  - [Date and time](#date-and-time)
+  - [File tools](#file-tools)
+  - [Other built-in tools](#other-built-in-tools)
+  - [Switching built-in tools on and off](#switching-built-in-tools-on-and-off)
+  - [Guides](#guides)
+  - [MCP servers](#mcp-servers)
+- [Long-term memory](#long-term-memory)
+- [Context compression](#context-compression)
+- [Getting the most from small models](#getting-the-most-from-small-models)
+  - [KV cache per chat](#kv-cache-per-chat)
+- [Build](#build)
+  - [File tools fail with "Win32 error 5"](#file-tools-fail-with-win32-error-5)
+- [Keyboard shortcuts](#keyboard-shortcuts)
+- [Project layout](#project-layout)
+- [How it talks to the server](#how-it-talks-to-the-server)
+- [Security notes](#security-notes)
+- [Limitations](#limitations)
+- [Contributing](#contributing)
+- [License](#license)
 
 ## Features
 
+### Chat experience
+
 - **Streaming chat** over llama-server's OpenAI-compatible API, with live token streaming and generation speed stats.
+- **Branching conversations.** Regenerate or edit a message and flip between alternatives (`‹ 1 / 2 ›`).
+- **Edit a reply and continue.** Correct the model's answer and let it go on from your text, as a new branch. This also continues a reply that hit the token limit.
+- **Message queue.** Press Enter while the model is working, and the message is sent when the reply is complete.
+- **Reasoning support.** Collapsible "Thinking" blocks for `reasoning_content` and inline `<think>` tags.
+- **Token confidence.** Words the model was unsure about are shaded. Click one to see the alternatives and continue from another choice.
+- **Search** across chat titles and contents.
+- **WebUI-compatible import/export** of chats as JSON.
+- **Chat list menu.** Right-click a chat (or press Shift+F10) to **Rename** it or **Copy original prompt**.
+
+### Tools, memory, and context
+
 - **Tool calling.** Built-in file tools and MCP servers (stdio and HTTP), with a per-call approval dialog. See [Tools](#tools-file-access-and-mcp).
 - **Long-term memory.** Facts the model saves are stored locally and injected into every chat. See [Memory](#long-term-memory).
-- **Branching conversations.** Regenerate or edit a message and flip between alternatives (`‹ 1 / 2 ›`).
-- **Reasoning support.** Collapsible "Thinking" blocks for `reasoning_content` and inline `<think>` tags.
+- **Context management for small models.** Old tool results are shortened before anything is summarized, every request is fitted into the context, and a gauge shows how full it is. See [Context compression](#context-compression) and [Getting the most from small models](#getting-the-most-from-small-models).
+- **File checkpoints.** Files changed by tools are saved first. Going back to an earlier message can restore them.
+- **Tool and MCP switches.** The **Tools** and **MCP** buttons in the input box switch single built-in tools and whole MCP servers on or off, with the token cost of each tool shown.
+- **Guides** let you keep longer instructions in separate Markdown files and load them only when needed.
+
+### Rendering and attachments
+
 - **Rich rendering** in a native RichEdit control: Markdown (headings, lists, quotes, tables, inline code), syntax-highlighted code blocks with **Copy** and **Download** buttons. Long code lines wrap inside the block.
 - **Clickable links.** `[text](url)` links and bare `http(s)://` URLs open in your default browser. Only `http`, `https` and `mailto` links are opened.
-- **Context management for small models.** Old tool results are shortened before anything is summarized, every request is fitted into the context, and a gauge shows how full it is. See [Context compression](#context-compression) and [Getting the most from small models](#getting-the-most-from-small-models).
-- **Profiles.** A saved prompt also keeps a reminder, a tool set, sampling values, a reasoning budget and template kwargs.
-- **Edit a reply and continue.** Correct the model's answer and let it go on from your text, as a new branch. This also continues a reply that hit the token limit.
-- **Token confidence.** Words the model was unsure about are shaded. Click one to see the alternatives and continue from another choice.
-- **File checkpoints.** Files changed by tools are saved first. Going back to an earlier message can restore them.
 - **Attachments.** Images, audio (`.mp3`, `.wav`), text files and **PDF / DOCX / XLSX** (attached as their text), via the button, drag and drop onto the window, the input box or the chat view, a long paste that becomes an attachment, or **Ctrl+V of a screenshot or of files copied in Explorer**.
-- **Message queue.** Press Enter while the model is working, and the message is sent when the reply is complete.
-- **Tool and MCP switches.** The **Tools** and **MCP** buttons in the input box switch single built-in tools and whole MCP servers on or off, with the token cost of each tool shown.
 - **Documents.** PDF, DOCX and XLSX are read as text, by the file tools and as attachments, with no other software installed.
-- **KV cache per chat.** With llama-server's `--slot-save-path`, switching back to a long chat restores its cache instead of processing it again.
+
+### Configuration and portability
+
+- **Profiles.** A saved prompt also keeps a reminder, a tool set, sampling values, a reasoning budget and template kwargs.
 - **Server-default aware settings.** Sampling parameters left empty are _not sent_, so llama-server's own values apply. Settings are read from `GET /props`.
 - **Full sampling control:** temperature, top-k, top-p, min-p, repeat/presence/frequency penalty, DRY, max tokens, seed, stop strings.
 - **Advanced:** Jinja `chat_template_kwargs`, `reasoning_format`, extra request JSON, and a **Jinja template viewer** (`POST /apply-template`).
-- **WebUI-compatible import/export** of chats as JSON.
-- **Search** across chat titles and contents.
-- **Chat list menu.** Right-click a chat (or press Shift+F10) to **Rename** it or **Copy original prompt**.
+- **KV cache per chat.** With llama-server's `--slot-save-path`, switching back to a long chat restores its cache instead of processing it again.
 - **Dark and light themes** with a Windows 11 style frame (DWM).
-- **Portable.** Data is stored in a `data\` folder next to the exe. If that isn't writable, it falls back to `%APPDATA%\llamac`, then `%TEMP%\llamac`.
+- **Portable.** Data is stored in a `data\\` folder next to the exe. If that isn't writable, it falls back to `%APPDATA%\\llamac`, then `%TEMP%\\llamac`.
 
 ## Quick start
 
@@ -357,4 +403,4 @@ Issues and pull requests are welcome. Keep the code dependency-free and make sur
 
 ## License
 
-MIT
+MIT\n

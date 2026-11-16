@@ -376,6 +376,7 @@ static void act_queue(void)
     memcpy(g_queue_att, pend, sizeof(Att) * (size_t)npend); /* the queue takes over the attachments */
     g_queue_natt = npend;
     npend = 0;
+    attach_badge_refresh();
     SetWindowTextW(hInput, L"");
     set_status("Queued: your message is sent when the current reply is complete (Stop puts it back in the box).");
 }

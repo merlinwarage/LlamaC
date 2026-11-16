@@ -103,12 +103,109 @@ static void rrect(HDC dc, const RECT *r, int rad, COLORREF fill, COLORREF line)
     DeleteObject(b);
     DeleteObject(p);
 }
+/* the bottom dock: composer buttons (+, T, M) are glyphs with an optional count badge ("T\t18/22"), Send is an
+   arrow / stop square, the actions row is small quiet text; Delete buttons turn red on hover */
+static int is_tool_glyph(int id) { return id == IDC_ATTACH || id == IDC_TOOLSBTN || id == IDC_MCPBTN; }
+static int is_action(int id) { return (id >= IDC_REGEN && id <= IDC_COPY && id != IDC_SEND && id != IDC_ATTACH) || id == IDC_DELC || id == IDC_EDITREPLY; }
+static void draw_dock_btn_dc(DRAWITEMSTRUCT *d);
+static void draw_dock_btn(DRAWITEMSTRUCT *d)
+{ /* double-buffered: drawn into a memory bitmap and copied in one step, so no half-drawn state is ever visible */
+    DRAWITEMSTRUCT m = *d;
+    int w = d->rcItem.right - d->rcItem.left, h = d->rcItem.bottom - d->rcItem.top;
+    HDC mdc = CreateCompatibleDC(d->hDC);
+    HBITMAP bm = CreateCompatibleBitmap(d->hDC, w > 0 ? w : 1, h > 0 ? h : 1);
+    HGDIOBJ old = SelectObject(mdc, bm);
+    m.hDC = mdc;
+    SetRect(&m.rcItem, 0, 0, w, h);
+    draw_dock_btn_dc(&m);
+    BitBlt(d->hDC, d->rcItem.left, d->rcItem.top, w, h, mdc, 0, 0, SRCCOPY);
+    SelectObject(mdc, old);
+    DeleteObject(bm);
+    DeleteDC(mdc);
+}
+static void draw_dock_btn_dc(DRAWITEMSTRUCT *d)
+{
+    int id = (int)d->CtlID;
+    HDC dc = d->hDC;
+    RECT r = d->rcItem;
+    int pressed = (d->itemState & ODS_SELECTED) != 0, hot = (d->hwndItem == hHot);
+    wchar_t t[64], *tab;
+    COLORREF par = is_tool_glyph(id) ? cSurf : cBg, bg = par, fg = cDim;
+    HBRUSH pb = CreateSolidBrush(par);
+    GetWindowTextW(d->hwndItem, t, 64);
+    FillRect(dc, &r, pb);
+    DeleteObject(pb);
+    SetBkMode(dc, TRANSPARENT);
+    if (id == IDC_SEND)
+    { /* accent square with an arrow; red with a stop square while generating */
+        RECT g = r;
+        bg = busy ? RGB(220, 38, 38) : cAccent;
+        if (hot)
+            bg = adj(bg, 22);
+        if (pressed)
+            bg = adj(bg, -28);
+        rrect(dc, &r, 14, bg, bg);
+        SelectObject(dc, hFontSym);
+        SetTextColor(dc, RGB(255, 255, 255));
+        DrawTextW(dc, busy ? L"\x25A0" : L"\x27A4", -1, &g, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+        return;
+    }
+    if (hot || pressed)
+    {
+        bg = is_tool_glyph(id) ? adj(cSurf, G.dark ? 16 : -8) : adj(cBg, G.dark ? 14 : -7);
+        if (pressed)
+            bg = adj(bg, G.dark ? 10 : -8);
+        fg = (id == IDC_DELM || id == IDC_DELC) ? cErr : cFg;
+        rrect(dc, &r, 10, bg, bg);
+    }
+    tab = wcschr(t, L'\t');
+    if (is_tool_glyph(id))
+    {
+        RECT g = r, b = r;
+        wchar_t nb[16];
+        const wchar_t *badge = NULL;
+        if (tab)
+        {
+            *tab = 0;
+            badge = tab + 1;
+        }
+        else if (id == IDC_ATTACH && npend)
+        { /* pending attachments */
+            _snwprintf(nb, 16, L"%d", npend);
+            nb[15] = 0;
+            badge = nb;
+        }
+        if (badge)
+        {
+            g.bottom -= 11; /* glyph up, badge below */
+            b.top = b.bottom - 17;
+        }
+        SelectObject(dc, hFontI);
+        SetTextColor(dc, hot ? cFg : cDim);
+        DrawTextW(dc, t, -1, &g, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+        if (badge)
+        {
+            SelectObject(dc, hFontXS);
+            SetTextColor(dc, cAccent);
+            DrawTextW(dc, badge, -1, &b, DT_CENTER | DT_TOP | DT_SINGLELINE | DT_NOPREFIX);
+        }
+        return;
+    }
+    SelectObject(dc, (id == IDC_PREV || id == IDC_NEXT) ? hFontSym : hFontS);
+    SetTextColor(dc, fg);
+    DrawTextW(dc, t, -1, &r, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+}
 static void draw_btn(DRAWITEMSTRUCT *d)
 {
     int id = (int)d->CtlID;
     HDC dc = d->hDC;
     RECT r = d->rcItem;
     int pressed = (d->itemState & ODS_SELECTED) != 0, hot = (d->hwndItem == hHot);
+    if (GetParent(d->hwndItem) == hMain && (id == IDC_SEND || is_tool_glyph(id) || is_action(id)))
+    {
+        draw_dock_btn(d);
+        return;
+    }
     int primary = (id == IDC_NEW || id == IDC_SEND || id == IDOK), danger = (id == IDC_SEND && busy);
     COLORREF par = (id == IDC_ATTACH || id == IDC_SEND || id == IDC_MCPBTN || id == IDC_TOOLSBTN) ? cSurf : (id == IDC_NEW || id == IDOK || id == IDCANCEL || id == IDC_RESET) ? cPanel
                                                                                                                                      : cBg;
@@ -203,6 +300,24 @@ static LRESULT CALLBACK BtnSub(HWND h, UINT m, WPARAM w, LPARAM l, UINT_PTR id, 
         return TRUE;
     }
     return DefSubclassProc(h, m, w, l);
+}
+/* sets (or replaces) the tooltip of a main-window control */
+static void main_tip(HWND ctl, const char *text)
+{
+    TOOLINFOW ti;
+    wchar_t *w;
+    if (!g_mtt || !ctl)
+        return;
+    memset(&ti, 0, sizeof ti);
+    ti.cbSize = TTTOOLINFOW_V2_SIZE;
+    ti.hwnd = hMain;
+    ti.uId = (UINT_PTR)ctl;
+    SendMessageW(g_mtt, TTM_DELTOOLW, 0, (LPARAM)&ti);
+    w = w_from(text);
+    ti.uFlags = TTF_IDISHWND | TTF_SUBCLASS;
+    ti.lpszText = w;
+    SendMessageW(g_mtt, TTM_ADDTOOLW, 0, (LPARAM)&ti);
+    free(w);
 }
 static HWND mkbtn(HWND par, const wchar_t *t, int id)
 {

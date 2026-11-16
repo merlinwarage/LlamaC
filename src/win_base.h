@@ -101,6 +101,10 @@ typedef struct
 
 static HWND hMain, hSearch, hList, hChat, hInput, hStatus, hModel, hHot;
 static HFONT hFont, hFontB, hFontT;
+static HFONT hFontS;   /* 13 px: the actions row */
+static HFONT hFontI;   /* 17 px semibold: composer glyphs (+, T, M) */
+static HFONT hFontXS;  /* 10 px semibold: count badges */
+static HFONT hFontSym; /* Segoe UI Symbol: arrows and the stop square */
 static HACCEL hAcc;
 static HBRUSH hbrBg, hbrPanel, hbrSurf;
 static COLORREF cBg, cPanel, cSurf, cBorder, cFg, cDim, cAccent, cUser, cAsst, cCode, cCodeBg, cErr = RGB(248, 113, 113);
@@ -123,6 +127,11 @@ static wchar_t dataDir[MAX_PATH];
 static int sbVisible = 1, g_colw = 800;
 static RECT rcSide, rcSearch, rcHead, rcBox, rcTitle;
 static RECT rcGauge; /* context gauge right of the status line (click: context window) */
+static RECT rcTools; /* composer: the + / T / M button group */
+static int g_ydock;  /* y of the divider between the chat and the bottom dock */
+static int g_actdiv[2]; /* x of the dividers in the actions row */
+static int g_actdiv_y;
+static HWND g_mtt;   /* tooltips of the main window's buttons */
 static WNDPROC oldInput;
 static const wchar_t *FACE = L"Segoe UI", *MONO = L"Consolas";
 static int g_nctx;   /* context window from /props, 0 = unknown */

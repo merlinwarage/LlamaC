@@ -565,11 +565,19 @@ static void mcp_btn_update(void)
         if (g_srv[i] && !g_srv[i]->off && g_srv[i]->ok)
             on++;
     if (n)
-        _snwprintf(t, 32, L"MCP %d/%d", on, n);
+        _snwprintf(t, 32, L"M\t%d/%d", on, n); /* drawn as an M glyph with a count badge */
     else
-        wcscpy(t, L"MCP");
+        wcscpy(t, L"M");
     t[31] = 0;
     SetWindowTextW(b, t);
+    {
+        char tip[160];
+        if (n)
+            snprintf(tip, sizeof tip, "MCP servers: %d of %d running. Click to switch servers on or off.", on, n);
+        else
+            snprintf(tip, sizeof tip, "MCP servers: none configured. Click to edit mcp.json.");
+        main_tip(b, tip);
+    }
     ShowWindow(b, G.tools_on ? SW_SHOW : SW_HIDE);
     InvalidateRect(b, NULL, FALSE);
 }

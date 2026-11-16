@@ -264,9 +264,14 @@ static void tools_btn_update(void)
             on += !name_in_list(G.tooloff, g_tools[i].name);
         }
     tl_leave();
-    _snwprintf(t, 32, L"Tools %d/%d", on, n);
+    _snwprintf(t, 32, L"T\t%d/%d", on, n); /* drawn as a T glyph with a count badge */
     t[31] = 0;
     SetWindowTextW(b, t);
+    {
+        char tip[160];
+        snprintf(tip, sizeof tip, "Built-in tools: %d of %d on. Click to choose which ones the model gets.", on, n);
+        main_tip(b, tip);
+    }
     ShowWindow(b, G.tools_on ? SW_SHOW : SW_HIDE);
     InvalidateRect(b, NULL, FALSE);
 }

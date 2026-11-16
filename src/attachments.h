@@ -3,6 +3,13 @@
 #define LLAMAC_ATTACHMENTS_H
 
 /* ---------- attachments ---------- */
+/* the attach button shows how many attachments are waiting */
+static void attach_badge_refresh(void)
+{
+    HWND b = GetDlgItem(hMain, IDC_ATTACH);
+    if (b)
+        InvalidateRect(b, NULL, FALSE);
+}
 static void pend_clear(void)
 {
     for (int i = 0; i < npend; i++)
@@ -12,6 +19,7 @@ static void pend_clear(void)
         free(pend[i].mime);
     }
     npend = 0;
+    attach_badge_refresh();
 }
 static void pend_status(void)
 {
@@ -36,6 +44,7 @@ static void pend_add(int kind, const char *name, const char *data, const char *m
     a->data = xstrdup(data);
     a->mime = xstrdup(mime);
     pend_status();
+    attach_badge_refresh();
 }
 /* clipboard bitmap -> PNG (WIC) -> data URL; NULL on failure. The PNG is much smaller than the raw bitmap. */
 /* HBITMAP -> PNG (WIC) -> "data:image/png;base64,..."; NULL on failure. Used by paste and the screenshot tool. */
