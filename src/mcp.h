@@ -23,10 +23,17 @@ typedef struct McpSrv
     HINTERNET hses;
     char *hdrs;
     char sid[200];
+    /* state for the MCP button in the input box */
+    volatile LONG off;  /* switched off by the user (not started, no tools) */
+    volatile LONG busy; /* being started or stopped */
+    int going_on;       /* while busy: 1 starting, 0 stopping */
+    int ok, ntools;
+    char err[200];
 } McpSrv;
 static McpSrv *g_srv[MCP_MAX_SRV];
 static volatile int g_nsrv;
 static volatile LONG g_booting;
+static volatile LONG g_mcp_reload; /* a full reload frees and rebuilds g_srv: the menu must not read it meanwhile */
 
 static char *mcp_stdio_exchange(McpSrv *s, long id, const char *msg, int timeout_ms, int cancel, char *err, size_t es);
 static char *mcp_http_exchange(McpSrv *s, long id, const char *msg, int timeout_ms, int cancel, char *err, size_t es);
@@ -196,6 +203,8 @@ static char *mcp_call_tool(int srv, const char *rname, J *args)
     J *r, *res, *content;
     if (!s)
         return xstrdup("Error: MCP server is not available (try Settings > Reload MCP)");
+    if (s->off || s->busy)
+        return xstrdup("Error: this MCP server is switched off");
     sb_puts(&pr, "{\"name\":");
     sb_json(&pr, rname);
     sb_puts(&pr, ",\"arguments\":");
@@ -305,6 +314,81 @@ static void mcp_stop_all(void)
         g_srv[i] = NULL;
     }
 }
+/* ---------- servers switched off from the input box (G.mcpoff = "|a|b|", saved in settings, mcp.json untouched) ---------- */
+static int mcp_is_off(const char *name)
+{
+    char k[80];
+    snprintf(k, sizeof k, "|%s|", name);
+    return strstr(G.mcpoff, k) != NULL;
+}
+static void mcp_set_off(const char *name, int off)
+{
+    char k[80], *at;
+    snprintf(k, sizeof k, "|%s|", name);
+    while ((at = strstr(G.mcpoff, k)) != NULL) /* remove (keeps the leading '|') */
+        memmove(at, at + strlen(k) - 1, strlen(at + strlen(k) - 1) + 1);
+    if (!strcmp(G.mcpoff, "|"))
+        G.mcpoff[0] = 0;
+    if (off && strlen(G.mcpoff) + strlen(k) < sizeof G.mcpoff)
+    {
+        if (!G.mcpoff[0])
+            strcpy(G.mcpoff, k);
+        else
+            strcat(G.mcpoff, k + 1);
+    }
+    cfg_save();
+}
+/* back to a never-opened state, so the same slot (and tool index) can be opened again */
+static void mcp_srv_reset(McpSrv *s)
+{
+    mcp_srv_stop(s);
+    if (s->hses)
+    {
+        WinHttpCloseHandle(s->hses);
+        s->hses = NULL;
+    }
+    free(s->cmdline);
+    free(s->cwd);
+    free(s->env);
+    free(s->hdrs);
+    s->cmdline = s->cwd = s->env = NULL;
+    s->hdrs = NULL;
+    s->sid[0] = 0;
+    InterlockedExchange(&s->dead, 0);
+    s->ok = s->ntools = 0;
+    s->err[0] = 0;
+}
+/* opens server slot idx from its mcp.json entry and loads its tools; the result is kept in s->ok / ntools / err */
+static int mcp_open_one(McpSrv *s, int idx, J *e)
+{
+    int opened, nt = 0;
+    char err[300] = "";
+    if (j_str(j_get(e, "url")))
+    {
+        s->kind = 1;
+        opened = mcp_http_open(s, e, err, sizeof err);
+    }
+    else if (j_str(j_get(e, "command")))
+    {
+        s->kind = 0;
+        opened = mcp_stdio_open(s, e, err, sizeof err);
+    }
+    else
+    {
+        snprintf(err, sizeof err, "needs \"command\" (stdio) or \"url\" (HTTP)");
+        opened = 0;
+    }
+    if (opened && mcp_handshake(s, idx, err, sizeof err, &nt))
+    {
+        s->ok = 1;
+        s->ntools = nt;
+        return 1;
+    }
+    tools_clear(1, idx);
+    mcp_srv_stop(s);
+    snprintf(s->err, sizeof s->err, "%s", err[0] ? err : "failed");
+    return 0;
+}
 static char *mcp_connect_all(void)
 {
     wchar_t p[MAX_PATH];
@@ -331,8 +415,7 @@ static char *mcp_connect_all(void)
     for (J *e = srvs->child; e && g_nsrv < MCP_MAX_SRV; e = e->next)
     {
         McpSrv *s;
-        char err[300] = "";
-        int idx, nt = 0, opened;
+        int idx;
         J *dis = j_get(e, "disabled"), *aa = j_get(e, "autoApprove"), *to = j_get(e, "timeout");
         if (!e->key || e->t != J_OBJ || (dis && dis->num != 0))
             continue;
@@ -357,35 +440,24 @@ static char *mcp_connect_all(void)
         }
         idx = g_nsrv;
         g_srv[g_nsrv++] = s;
-        if (j_str(j_get(e, "url")))
-        {
-            s->kind = 1;
-            opened = mcp_http_open(s, e, err, sizeof err);
+
+        if (mcp_is_off(s->name))
+        { /* switched off in the input box: keep the slot, do not start it */
+            s->off = 1;
+            continue;
         }
-        else if (j_str(j_get(e, "command")))
-        {
-            s->kind = 0;
-            opened = mcp_stdio_open(s, e, err, sizeof err);
-        }
-        else
-        {
-            snprintf(err, sizeof err, "needs \"command\" (stdio) or \"url\" (HTTP)");
-            opened = 0;
-        }
-        if (opened && mcp_handshake(s, idx, err, sizeof err, &nt))
+        if (mcp_open_one(s, idx, e))
         {
             ok++;
-            total += nt;
+            total += s->ntools;
         }
         else
         {
-            tools_clear(1, idx);
-            mcp_srv_stop(s);
             if (fail.n)
                 sb_puts(&fail, "; ");
             sb_puts(&fail, s->name);
             sb_puts(&fail, ": ");
-            sb_puts(&fail, err[0] ? err : "failed");
+            sb_puts(&fail, s->err);
         }
     }
     j_free(r);
@@ -402,8 +474,205 @@ static DWORD WINAPI mcp_boot(LPVOID arg)
     sum = mcp_connect_all();
     post_msg(9, sum);
     free(sum);
+    InterlockedExchange(&g_mcp_reload, 0);
     InterlockedExchange(&g_booting, 0);
+    post_msg(16, ""); /* update the MCP button */
     return 0;
+}
+/* ---------- switching one server on or off (MCP button in the input box) ---------- */
+static DWORD WINAPI mcp_toggle_thread(LPVOID arg)
+{
+    int idx = (int)(INT_PTR)arg;
+    McpSrv *s = g_srv[idx];
+    char st[400];
+    if (s->off)
+    { /* switch on: read its entry from mcp.json again (it may have been edited) */
+        wchar_t p[MAX_PATH];
+        size_t len;
+        unsigned char *b;
+        J *r = NULL, *e = NULL, *srvs;
+        data_path(L"mcp.json", p);
+        b = read_file(p, &len);
+        if (b)
+        {
+            r = json_parse((char *)b);
+            free(b);
+        }
+        srvs = j_get(r, "mcpServers");
+        if (!srvs)
+            srvs = j_get(r, "servers");
+        e = j_get(srvs, s->name);
+        mcp_srv_reset(s);
+        if (e && e->t == J_OBJ && mcp_open_one(s, idx, e))
+            snprintf(st, sizeof st, "MCP: %s started, %d tool(s)", s->name, s->ntools);
+        else
+            snprintf(st, sizeof st, "MCP: %s could not start: %.300s", s->name, e ? s->err : "not in mcp.json any more");
+        InterlockedExchange(&s->off, 0);
+        j_free(r);
+    }
+    else
+    { /* switch off: remove its tools and stop its process */
+        tools_clear(1, idx);
+        InterlockedExchange(&s->off, 1);
+        mcp_srv_reset(s);
+        snprintf(st, sizeof st, "MCP: %s stopped", s->name);
+    }
+    InterlockedExchange(&s->busy, 0);
+    InterlockedExchange(&g_booting, 0);
+    post_msg(9, st);
+    post_msg(16, "");
+    return 0;
+}
+static int mcp_toggle(int idx)
+{
+    McpSrv *s;
+    HANDLE h;
+    if (idx < 0 || idx >= g_nsrv || !(s = g_srv[idx]))
+        return 0;
+    if (busy)
+    {
+        set_status("Stop the current generation before switching MCP servers");
+        return 0;
+    }
+    if (InterlockedExchange(&g_booting, 1))
+    {
+        set_status("MCP: wait until the servers have finished starting");
+        return 0;
+    }
+    mcp_set_off(s->name, !s->off);
+    s->going_on = s->off != 0;
+    InterlockedExchange(&s->busy, 1);
+    set_status(s->off ? "MCP: starting the server ..." : "MCP: stopping the server ...");
+    h = CreateThread(NULL, 0, mcp_toggle_thread, (LPVOID)(INT_PTR)idx, 0, NULL);
+    if (h)
+        CloseHandle(h);
+    else
+    {
+        InterlockedExchange(&s->busy, 0);
+        InterlockedExchange(&g_booting, 0);
+    }
+    return 1;
+}
+/* "MCP 2/3": servers running / servers in mcp.json that are not disabled there */
+static void mcp_btn_update(void)
+{
+    int on = 0, n = g_mcp_reload ? 0 : g_nsrv;
+    wchar_t t[32];
+    HWND b = GetDlgItem(hMain, IDC_MCPBTN);
+    if (!b)
+        return;
+    for (int i = 0; i < n; i++)
+        if (g_srv[i] && !g_srv[i]->off && g_srv[i]->ok)
+            on++;
+    if (n)
+        _snwprintf(t, 32, L"MCP %d/%d", on, n);
+    else
+        wcscpy(t, L"MCP");
+    t[31] = 0;
+    SetWindowTextW(b, t);
+    ShowWindow(b, G.tools_on ? SW_SHOW : SW_HIDE);
+    InvalidateRect(b, NULL, FALSE);
+}
+static void mcp_edit_config(HWND owner);
+/* the menu: every server of mcp.json with a check mark; it reopens after each click so several can be switched */
+static void mcp_menu(void)
+{
+    HWND b = GetDlgItem(hMain, IDC_MCPBTN);
+    RECT br;
+    for (;;)
+    {
+        HMENU m = CreatePopupMenu();
+        wchar_t p[MAX_PATH];
+        size_t len;
+        unsigned char *raw;
+        J *r = NULL, *srvs = NULL;
+        int cmd, k = 0, map[MCP_MAX_SRV * 2];
+        data_path(L"mcp.json", p);
+        raw = read_file(p, &len);
+        if (raw)
+        {
+            r = json_parse((char *)raw);
+            free(raw);
+            srvs = j_get(r, "mcpServers");
+            if (!srvs)
+                srvs = j_get(r, "servers");
+        }
+        for (J *e = srvs && srvs->t == J_OBJ ? srvs->child : NULL; e && k < MCP_MAX_SRV * 2; e = e->next)
+        {
+            J *dis = j_get(e, "disabled");
+            int idx = -1;
+            SB lab = {0};
+            wchar_t *w;
+            UINT fl = MF_STRING;
+            if (!e->key)
+                continue;
+            for (int i = 0; !g_mcp_reload && i < g_nsrv; i++)
+                if (g_srv[i] && !strcmp(g_srv[i]->name, e->key))
+                    idx = i;
+            sb_puts(&lab, e->key);
+            sb_putc(&lab, '\t');
+            if (dis && dis->num != 0)
+            {
+                sb_puts(&lab, "disabled in mcp.json");
+                fl |= MF_GRAYED;
+            }
+            else if (idx < 0)
+            {
+                sb_puts(&lab, g_mcp_reload ? "starting ..." : "not loaded - use Reload");
+                fl |= MF_GRAYED;
+            }
+            else
+            {
+                McpSrv *s = g_srv[idx];
+                if (s->busy)
+                {
+                    sb_puts(&lab, s->going_on ? "starting ..." : "stopping ...");
+                    fl |= MF_GRAYED;
+                }
+                else if (s->off)
+                    sb_puts(&lab, "off");
+                else if (s->ok)
+                    sb_printf(&lab, "%d tool%s", s->ntools, s->ntools == 1 ? "" : "s");
+                else
+                {
+                    sb_puts(&lab, "failed: ");
+                    sb_add(&lab, s->err, tx_cut(s->err, strlen(s->err), 60));
+                }
+                if (!s->off)
+                    fl |= MF_CHECKED;
+            }
+            w = w_from(sbs(&lab));
+            map[k] = idx;
+            AppendMenuW(m, fl, (UINT_PTR)(2000 + k), w);
+            free(w);
+            free(lab.p);
+            k++;
+        }
+        j_free(r);
+        if (!k)
+            AppendMenuW(m, MF_STRING | MF_GRAYED, 0, L"No MCP servers in mcp.json");
+        AppendMenuW(m, MF_SEPARATOR, 0, NULL);
+        AppendMenuW(m, MF_STRING | (g_booting ? MF_GRAYED : 0), 1901, L"Reload all servers");
+        AppendMenuW(m, MF_STRING, 1902, L"Edit mcp.json ...");
+        GetWindowRect(b, &br);
+        cmd = (int)TrackPopupMenu(m, TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_BOTTOMALIGN, br.left, br.top - 2, 0, hMain, NULL);
+        DestroyMenu(m);
+        if (cmd == 1901)
+        {
+            mcp_start_async();
+            return;
+        }
+        if (cmd == 1902)
+        {
+            mcp_edit_config(hMain);
+            return;
+        }
+        if (cmd < 2000 || cmd >= 2000 + k || map[cmd - 2000] < 0)
+            return; /* closed */
+        if (!mcp_toggle(map[cmd - 2000]))
+            return;
+        /* reopen so more servers can be switched; it shows the one just clicked as starting / stopping */
+    }
 }
 static void mcp_start_async(void)
 {
@@ -415,6 +684,7 @@ static void mcp_start_async(void)
     }
     if (InterlockedExchange(&g_booting, 1))
         return;
+    InterlockedExchange(&g_mcp_reload, 1);
     g_mcp_started = 1;
     set_status("MCP: connecting to servers ...");
     h = CreateThread(NULL, 0, mcp_boot, NULL, 0, NULL);

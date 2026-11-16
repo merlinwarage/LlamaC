@@ -84,7 +84,8 @@ enum
     IDC_CONTEXT,
     IDC_TOOLSET,
     IDC_BROWSE_FS,
-    IDC_BROWSE_KV
+    IDC_BROWSE_KV,
+    IDC_MCPBTN
 };
 #define WM_APP_MSG (WM_APP + 1)
 #define WM_APP_INIT (WM_APP + 2)

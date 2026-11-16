@@ -2,6 +2,7 @@
 #ifndef LLAMAC_SETTINGS_UI_H
 #define LLAMAC_SETTINGS_UI_H
 
+static void layout(void); /* main_window.h */
 /* ---------- settings window (values left empty = use llama-server's own) ---------- */
 static HWND hSet, setCtl[NFIELDS];
 static int setDone;
@@ -502,6 +503,8 @@ static LRESULT CALLBACK SetProc(HWND h, UINT m, WPARAM w, LPARAM l)
             path_clean(G.kvdir);
             cfg_save();
             tools_apply_settings();
+            layout(); /* the MCP button in the input box comes and goes with "Enable tools" */
+            mcp_btn_update();
             set_theme();
             render_all();
             DestroyWindow(h);

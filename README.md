@@ -2,7 +2,7 @@
 
 **A native Win32 client for [llama-server](https://github.com/ggml-org/llama.cpp) written in pure C.** A single small `.exe`, no runtime, no Electron, no browser. It aims to feel like the llama.cpp WebUI. `Only 4MB of memory usage`.
 
-![language](https://img.shields.io/badge/language-C-blue) ![platform](https://img.shields.io/badge/platform-Windows%2010%2F11-0078D6) ![deps](https://img.shields.io/badge/dependencies-none-brightgreen) ![version](https://img.shields.io/badge/version-2.3.0-lightgrey)
+![language](https://img.shields.io/badge/language-C-blue) ![platform](https://img.shields.io/badge/platform-Windows%2010%2F11-0078D6) ![deps](https://img.shields.io/badge/dependencies-none-brightgreen) ![version](https://img.shields.io/badge/version-3.0.0-lightgrey)
 
 <img src="docs/main.png" alt="Console" width="49%"> <img src="docs/settings.png" alt="Config" width="49%">
 
@@ -123,7 +123,9 @@ Click **Edit MCP servers...** in Settings to open the built-in `mcp.json` editor
 | `timeout`     | Seconds per request (default 60)                                          |
 | `disabled`    | Skip this server                                                          |
 
-MCP tools appear to the model as `servername__toolname`. Stdio servers run inside a Windows job object, so the whole process tree is killed when llamac closes.
+MCP tools appear to the model as `servername__toolname`.
+
+**Switching servers on and off:** the **MCP 2/3** button next to the attach button in the input box lists the servers in `mcp.json` with a check mark (and their tool count, or the error if one failed to start). Clicking a server stops it - its process ends and its tools are no longer sent - or starts it again; the menu stays open so several can be switched. The choice is kept in llamac's settings across restarts, `mcp.json` is not changed. Servers with `"disabled": true` in `mcp.json` are shown greyed. The menu also has **Reload all servers** and **Edit mcp.json**. Servers cannot be switched while a reply is being generated. Stdio servers run inside a Windows job object, so the whole process tree is killed when llamac closes.
 
 ## Long-term memory
 

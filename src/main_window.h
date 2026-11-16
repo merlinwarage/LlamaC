@@ -107,7 +107,13 @@ static void layout(void)
     }
     SetRect(&rcBox, left, yBox, left + cw, yBox + boxH);
     MoveWindow(B(IDC_ATTACH), left + 10, yBox + (boxH - 38) / 2, 38, 38, TRUE);
-    MoveWindow(hInput, left + 60, yBox + 14, cw - 60 - 100, boxH - 28, TRUE);
+    if (G.tools_on)
+    { /* MCP server switch next to the attach button */
+        MoveWindow(B(IDC_MCPBTN), left + 52, yBox + (boxH - 38) / 2, 74, 38, TRUE);
+        MoveWindow(hInput, left + 134, yBox + 14, cw - 134 - 100, boxH - 28, TRUE);
+    }
+    else
+        MoveWindow(hInput, left + 60, yBox + 14, cw - 60 - 100, boxH - 28, TRUE);
     MoveWindow(B(IDC_SEND), left + cw - 88, yBox + (boxH - 38) / 2, 78, 38, TRUE);
     MoveWindow(hStatus, left, yStatus, cw - 186, 20, TRUE);
     SetRect(&rcGauge, left + cw - 176, yStatus + 1, left + cw, yStatus + 19);
@@ -168,8 +174,8 @@ static void paint_main(HWND h)
         DrawTextW(dc, L"LlamaC", -1, &t, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
         SelectObject(dc, hFont);
         SetTextColor(dc, cAccent);
-        RECT t2 = {124, 22, rcSide.right - 10, 50};
-        DrawTextW(dc, L"  native", -1, &t2, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        RECT t2 = {104, 22, rcSide.right - 10, 50};
+        DrawTextW(dc, L"native", -1, &t2, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
         SelectObject(dc, hFont);
         SetTextColor(dc, cDim);
         RECT tv = {14, 22, rcSide.right - 16, 50};
@@ -243,6 +249,7 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l)
         mkbtn(h, L"Copy", IDC_COPY);
         mkbtn(h, L"Delete chat", IDC_DELC);
         mkbtn(h, L"+", IDC_ATTACH);
+        mkbtn(h, L"MCP", IDC_MCPBTN);
         mkbtn(h, L"Send", IDC_SEND);
         /* drops also work when the app runs elevated (UIPI would otherwise block them from Explorer) */
         ChangeWindowMessageFilterEx(h, WM_DROPFILES, MSGFLT_ALLOW, NULL);
@@ -262,6 +269,7 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l)
     }
     case WM_APP_INIT:
         layout();
+        mcp_btn_update();
         tools_startup();
         set_status("Connecting...");
         if (!nconv)
@@ -465,6 +473,9 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l)
         case IDC_EDITREPLY:
             act_edit_reply();
             break;
+        case IDC_MCPBTN:
+            mcp_menu();
+            break;
         case IDC_QUEUE:
             act_queue();
             break;
@@ -561,6 +572,8 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l)
             }
             else if (g->kind == 14)
                 kv_mark(g->text); /* this chat's KV cache is now saved on the server */
+            else if (g->kind == 16)
+                mcp_btn_update(); /* MCP servers started / stopped */
             else if (g->kind == 15)
                 kv_forget(g->text); /* its saved KV cache could not be restored */
             else if (g->kind == 3)
