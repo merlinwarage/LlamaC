@@ -17,8 +17,10 @@ typedef struct
     char name[72];
     char desc[160];
     int tok;
+    int inset; /* allowed by the tool set; rows it excludes are greyed out and keep their tick */
 } TdRow;
 static TdRow td_rows[TD_MAX];
+static int td_chk[TD_MAX]; /* tick state of the owner-drawn checkboxes */
 static int td_n, td_done, td_ok;
 static char *td_list;
 static size_t td_cap;
@@ -47,17 +49,56 @@ static int tool_tokens(const Tool *t, double cpt)
 static void td_total(HWND h)
 {
     int on = 0, tok = 0;
-    wchar_t s[160];
+    wchar_t s[200];
     for (int i = 0; i < td_n; i++)
-        if (SendMessageW(GetDlgItem(h, IDC_TD_CHK + i), BM_GETCHECK, 0, 0) == BST_CHECKED)
+        if (td_rows[i].inset && td_chk[i])
         {
             on++;
             tok += td_rows[i].tok;
         }
-    _snwprintf(s, 160, L"On: %d of %d built-in tools, about %d tokens in every request%s", on, td_n, tok,
+    _snwprintf(s, 200, L"Sent: %d of %d built-in tools, about %d tokens in every request%s", on, td_n, tok,
                ms_known() ? L"" : L" (rough: measured after the first reply with this model)");
-    s[159] = 0;
+    s[199] = 0;
     SetDlgItemTextW(h, IDC_TD_TOTAL, s);
+}
+/* owner-drawn checkbox: box border green = ticked and sent, red = unticked, grey = not in the tool set (tick kept) */
+static void td_draw_chk(DRAWITEMSTRUCT *d, int i)
+{
+    HDC dc = d->hDC;
+    RECT r = d->rcItem, box, tr;
+    int sz = 16, inset = td_rows[i].inset, on = td_chk[i];
+    COLORREF line = !inset ? cDim : on ? cStr : cErr;
+    wchar_t txt[80];
+    HGDIOBJ of;
+    FillRect(dc, &r, hbrPanel);
+    SetRect(&box, r.left + 1, r.top + (r.bottom - r.top - sz) / 2, r.left + 1 + sz, r.top + (r.bottom - r.top - sz) / 2 + sz);
+    rrect(dc, &box, 5, cPanel, line);
+    InflateRect(&box, -1, -1); /* 2 px border */
+    rrect(dc, &box, 4, cPanel, line);
+    if (on)
+    {
+        HPEN p = CreatePen(PS_SOLID, 2, line);
+        HGDIOBJ op = SelectObject(dc, p);
+        MoveToEx(dc, box.left + 3, box.top + 7, NULL);
+        LineTo(dc, box.left + 6, box.top + 10);
+        LineTo(dc, box.left + 11, box.top + 3);
+        SelectObject(dc, op);
+        DeleteObject(p);
+    }
+    GetWindowTextW(d->hwndItem, txt, 80);
+    of = SelectObject(dc, hFont);
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, inset ? cFg : cDim);
+    SetRect(&tr, r.left + sz + 10, r.top, r.right, r.bottom);
+    DrawTextW(dc, txt, -1, &tr, DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
+    if ((d->itemState & ODS_FOCUS) && !(d->itemState & ODS_NOFOCUSRECT))
+    {
+        DrawTextW(dc, txt, -1, &tr, DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_CALCRECT);
+        OffsetRect(&tr, 0, (r.bottom - r.top - (tr.bottom - tr.top)) / 2);
+        InflateRect(&tr, 2, 1);
+        DrawFocusRect(dc, &tr);
+    }
+    SelectObject(dc, of);
 }
 static LRESULT CALLBACK TdProc(HWND h, UINT m, WPARAM w, LPARAM l)
 {
@@ -82,6 +123,11 @@ static LRESULT CALLBACK TdProc(HWND h, UINT m, WPARAM w, LPARAM l)
     {
         DRAWITEMSTRUCT *d = (DRAWITEMSTRUCT *)l;
         UINT oid = d->CtlID;
+        if (oid >= IDC_TD_CHK && oid < (UINT)(IDC_TD_CHK + td_n))
+        {
+            td_draw_chk(d, (int)(oid - IDC_TD_CHK));
+            return TRUE;
+        }
         if (oid == IDC_TD_ALLON || oid == IDC_TD_ALLOFF)
             d->CtlID = IDC_RESET; /* same look as the settings dialog's secondary buttons */
         draw_btn(d);
@@ -92,17 +138,28 @@ static LRESULT CALLBACK TdProc(HWND h, UINT m, WPARAM w, LPARAM l)
     {
         int id = LOWORD(w);
         if (id >= IDC_TD_CHK && id < IDC_TD_CHK + td_n)
-            td_total(h);
-        else if (id == IDC_TD_ALLON || id == IDC_TD_ALLOFF)
         {
+            if (HIWORD(w) == BN_CLICKED || HIWORD(w) == BN_DOUBLECLICKED)
+            {
+                td_chk[id - IDC_TD_CHK] ^= 1;
+                InvalidateRect((HWND)l, NULL, FALSE);
+                td_total(h);
+            }
+        }
+        else if (id == IDC_TD_ALLON || id == IDC_TD_ALLOFF)
+        { /* greyed-out rows (not in the tool set) keep their tick */
             for (int i = 0; i < td_n; i++)
-                SendMessageW(GetDlgItem(h, IDC_TD_CHK + i), BM_SETCHECK, id == IDC_TD_ALLON ? BST_CHECKED : BST_UNCHECKED, 0);
+                if (td_rows[i].inset)
+                {
+                    td_chk[i] = id == IDC_TD_ALLON;
+                    InvalidateRect(GetDlgItem(h, IDC_TD_CHK + i), NULL, FALSE);
+                }
             td_total(h);
         }
         else if (id == IDOK)
         { /* tools not listed now (their setting is off) keep their state */
             for (int i = 0; i < td_n; i++)
-                name_list_set(td_list, td_cap, td_rows[i].name, SendMessageW(GetDlgItem(h, IDC_TD_CHK + i), BM_GETCHECK, 0, 0) != BST_CHECKED);
+                name_list_set(td_list, td_cap, td_rows[i].name, !td_chk[i]);
             td_ok = 1;
             td_done = 1;
         }
@@ -118,8 +175,9 @@ static LRESULT CALLBACK TdProc(HWND h, UINT m, WPARAM w, LPARAM l)
     }
     return DefWindowProcW(h, m, w, l);
 }
-/* edits list ("|name|...|" of switched-off tools) in place; 1 = OK pressed */
-static int tools_dialog(HWND owner, char *list, size_t cap)
+/* edits list ("|name|...|" of switched-off tools) in place; 1 = OK pressed. toolset / tools_on: the values to show the
+   dialog for (the Settings dialog passes its not yet applied choices) */
+static int tools_dialog(HWND owner, char *list, size_t cap, int toolset, int tools_on)
 {
     static int reg = 0;
     const int rowH = 28, colW = 560, nameW = 180, tokW = 80, top = 62;
@@ -140,6 +198,7 @@ static int tools_dialog(HWND owner, char *list, size_t cap)
             snprintf(r->name, sizeof r->name, "%s", g_tools[i].name);
             snprintf(r->desc, sizeof r->desc, "%.*s", (int)(L < 150 ? L : 150), d);
             r->tok = tool_tokens(&g_tools[i], cpt);
+            r->inset = toolset_allows(toolset, &g_tools[i]);
         }
     tl_leave();
     if (!reg)
@@ -174,10 +233,10 @@ static int tools_dialog(HWND owner, char *list, size_t cap)
         SendMessageW(tt, TTM_SETDELAYTIME, TTDT_AUTOPOP, 30000);
     }
     {
-        const char *info = !G.tools_on                 ? "Tools are off in Settings: none of these is sent."
-                           : G.toolset == 2            ? "Tool set is None: none of these is sent, whatever is ticked here."
-                           : G.toolset == 1            ? "Tool set is Chat: of these only date, memory, guides and ask_user are sent."
-                                                       : "Untick what you do not need now: fewer tool definitions, fewer tokens and fewer wrong tool calls.";
+        const char *info = !tools_on       ? "Tools are off in Settings: none of these is sent."
+                           : toolset == 2  ? "Tool set is None: none of these is sent. Ticks are kept for the All and Chat sets."
+                           : toolset == 1  ? "Tool set is Chat: greyed-out tools are not sent; their ticks are kept for the All set."
+                                           : "Untick what you do not need now: fewer tool definitions, fewer tokens and fewer wrong tool calls.";
         char line[400];
         wchar_t *wl;
         HWND s;
@@ -191,15 +250,19 @@ static int tools_dialog(HWND owner, char *list, size_t cap)
     {
         int c = i / rows, r = i % rows, x = 20 + c * colW, y = top + r * rowH;
         wchar_t *wn = w_from(td_rows[i].name), *wd = w_from(td_rows[i].desc), tk[24];
-        HWND cb = CreateWindowExW(0, L"BUTTON", wn, WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, x, y, nameW, 24, h, (HMENU)(INT_PTR)(IDC_TD_CHK + i), NULL, NULL);
+        HWND cb = CreateWindowExW(0, L"BUTTON", wn, WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, x, y, nameW, 24, h, (HMENU)(INT_PTR)(IDC_TD_CHK + i), NULL, NULL);
         HWND ds = CreateWindowExW(0, L"STATIC", wd, WS_CHILD | WS_VISIBLE | SS_NOPREFIX | SS_ENDELLIPSIS | SS_NOTIFY, x + nameW + 6, y + 4, colW - nameW - tokW - 20, 20, h,
                                   (HMENU)(INT_PTR)(IDC_TD_DESC + i), NULL, NULL);
         HWND ts;
         _snwprintf(tk, 24, L"~%d tok", td_rows[i].tok);
         tk[23] = 0;
         ts = CreateWindowExW(0, L"STATIC", tk, WS_CHILD | WS_VISIBLE | SS_RIGHT, x + colW - tokW - 14, y + 4, tokW, 20, h, (HMENU)(INT_PTR)(IDC_TD_TOK + i), NULL, NULL);
-        SetWindowTheme(cb, L"", L""); /* lets WM_CTLCOLORBTN colour the text in the dark theme */
-        SendMessageW(cb, BM_SETCHECK, name_in_list(list, td_rows[i].name) ? BST_UNCHECKED : BST_CHECKED, 0);
+        td_chk[i] = !name_in_list(list, td_rows[i].name);
+        if (!td_rows[i].inset)
+        {
+            EnableWindow(cb, FALSE);
+            EnableWindow(ts, FALSE);
+        }
         SendMessageW(cb, WM_SETFONT, (WPARAM)hFont, TRUE);
         SendMessageW(ds, WM_SETFONT, (WPARAM)hFont, TRUE);
         SendMessageW(ts, WM_SETFONT, (WPARAM)hFont, TRUE);
@@ -248,10 +311,10 @@ static int tools_dialog(HWND owner, char *list, size_t cap)
     SetForegroundWindow(owner);
     return td_ok;
 }
-/* "Tools 14/18": built-in tools that are on / available */
+/* "Tools 5/18": built-in tools actually sent (ticked and in the tool set) / available */
 static void tools_btn_update(void)
 {
-    int on = 0, n = 0;
+    int on = 0, ticked = 0, n = 0;
     wchar_t t[32];
     HWND b = GetDlgItem(hMain, IDC_TOOLSBTN);
     if (!b)
@@ -261,15 +324,20 @@ static void tools_btn_update(void)
         if (g_tools[i].kind == 0)
         {
             n++;
-            on += !name_in_list(G.tooloff, g_tools[i].name);
+            ticked += !name_in_list(G.tooloff, g_tools[i].name);
+            on += tool_in_set(&g_tools[i]);
         }
     tl_leave();
     _snwprintf(t, 32, L"T\t%d/%d", on, n); /* drawn as a T glyph with a count badge */
     t[31] = 0;
     SetWindowTextW(b, t);
     {
-        char tip[160];
-        snprintf(tip, sizeof tip, "Built-in tools: %d of %d on. Click to choose which ones the model gets.", on, n);
+        char tip[200];
+        if (G.toolset == 0)
+            snprintf(tip, sizeof tip, "Built-in tools: %d of %d sent. Click to choose which ones the model gets.", on, n);
+        else
+            snprintf(tip, sizeof tip, "Built-in tools: %d of %d sent (tool set: %s; %d ticked). Click to choose which ones the model gets.", on, n,
+                     G.toolset == 2 ? "None" : "Chat", ticked);
         main_tip(b, tip);
     }
     ShowWindow(b, G.tools_on ? SW_SHOW : SW_HIDE);
@@ -278,7 +346,7 @@ static void tools_btn_update(void)
 /* the Tools button in the input box */
 static void act_tools(void)
 {
-    if (tools_dialog(hMain, G.tooloff, sizeof G.tooloff))
+    if (tools_dialog(hMain, G.tooloff, sizeof G.tooloff, G.toolset, G.tools_on))
     {
         cfg_save();
         tools_btn_update();

@@ -11,34 +11,40 @@ LlamaC is a single, portable `.exe` with no runtime, Electron, or browser depend
 
 <p align="center">
   <img src="docs/main.png" alt="LlamaC chat window" width="49%">
-  <img src="docs/settings.png" alt="LlamaC settings window" width="49%">
+  <img src="docs/settings.png" alt="LlamaC settings window" width="49%"> <img src="docs/tools.png" alt="LlamaC settings window" width="49%">
 </p>
 
 ## Contents
 
-- [Features](#features)
-- [Quick start](#quick-start)
-- [Settings](#settings)
-- [Tools: file access and MCP](#tools-file-access-and-mcp)
-  - [Date and time](#date-and-time)
-  - [File tools](#file-tools)
-  - [Other built-in tools](#other-built-in-tools)
-  - [Switching built-in tools on and off](#switching-built-in-tools-on-and-off)
-  - [Guides](#guides)
-  - [MCP servers](#mcp-servers)
-- [Long-term memory](#long-term-memory)
-- [Context compression](#context-compression)
-- [Getting the most from small models](#getting-the-most-from-small-models)
-  - [KV cache per chat](#kv-cache-per-chat)
-- [Build](#build)
-  - [File tools fail with "Win32 error 5"](#file-tools-fail-with-win32-error-5)
-- [Keyboard shortcuts](#keyboard-shortcuts)
-- [Project layout](#project-layout)
-- [How it talks to the server](#how-it-talks-to-the-server)
-- [Security notes](#security-notes)
-- [Limitations](#limitations)
-- [Contributing](#contributing)
-- [License](#license)
+- [LlamaC](#llamac)
+    - [Contents](#contents)
+    - [Features](#features)
+        - [Chat experience](#chat-experience)
+        - [Tools, memory, and context](#tools-memory-and-context)
+        - [Rendering and attachments](#rendering-and-attachments)
+        - [Configuration and portability](#configuration-and-portability)
+    - [Quick start](#quick-start)
+    - [Settings](#settings)
+    - [Tools: file access and MCP](#tools-file-access-and-mcp)
+        - [Date and time](#date-and-time)
+        - [File tools](#file-tools)
+        - [Other built-in tools](#other-built-in-tools)
+        - [Switching built-in tools on and off](#switching-built-in-tools-on-and-off)
+        - [Guides](#guides)
+        - [MCP servers](#mcp-servers)
+    - [Long-term memory](#long-term-memory)
+    - [Context compression](#context-compression)
+    - [Getting the most from small models](#getting-the-most-from-small-models)
+        - [KV cache per chat](#kv-cache-per-chat)
+    - [Build](#build)
+        - [File tools fail with "Win32 error 5"](#file-tools-fail-with-win32-error-5)
+    - [Keyboard shortcuts](#keyboard-shortcuts)
+    - [Project layout](#project-layout)
+    - [How it talks to the server](#how-it-talks-to-the-server)
+    - [Security notes](#security-notes)
+    - [Limitations](#limitations)
+    - [Contributing](#contributing)
+    - [License](#license)
 
 ## Features
 
@@ -108,22 +114,22 @@ Turn everything on or off with **Enable tools** in Settings. The model must supp
 
 ### File tools
 
-| Tool               | Purpose                                       | Asks first |
-| ------------------ | --------------------------------------------- | ---------- |
-| `list_directory`   | List files and folders                        | no         |
-| `read_file`        | Read a text file, optionally a line range     | no         |
-| `search_files`     | Find files by wildcard and search their text  | no         |
-| `grep`             | Regular-expression search in file contents    | no         |
-| `glob`             | Find files by path pattern (`src/**/*.h`)     | no         |
-| `write_file`       | Create, overwrite or append to a file         | yes        |
-| `edit_file`        | Replace an exact piece of text (once, or all) | yes        |
-| `create_directory` | Create a folder and missing parents           | yes        |
-| `move_path`        | Move or rename a file or folder               | yes        |
-| `delete_file`      | Delete one file                               | yes        |
-| `run_command`      | Run a `cmd.exe` command, return its output    | yes        |
-| `multi_edit`       | Several replacements in one file, all or nothing | yes     |
-| `find_symbol`      | Where a function, class, type or macro is defined | no     |
-| `summarize_file`   | Summarize a long file in a separate model call | no        |
+| Tool               | Purpose                                           | Asks first |
+| ------------------ | ------------------------------------------------- | ---------- |
+| `list_directory`   | List files and folders                            | no         |
+| `read_file`        | Read a text file, optionally a line range         | no         |
+| `search_files`     | Find files by wildcard and search their text      | no         |
+| `grep`             | Regular-expression search in file contents        | no         |
+| `glob`             | Find files by path pattern (`src/**/*.h`)         | no         |
+| `write_file`       | Create, overwrite or append to a file             | yes        |
+| `edit_file`        | Replace an exact piece of text (once, or all)     | yes        |
+| `create_directory` | Create a folder and missing parents               | yes        |
+| `move_path`        | Move or rename a file or folder                   | yes        |
+| `delete_file`      | Delete one file                                   | yes        |
+| `run_command`      | Run a `cmd.exe` command, return its output        | yes        |
+| `multi_edit`       | Several replacements in one file, all or nothing  | yes        |
+| `find_symbol`      | Where a function, class, type or macro is defined | no         |
+| `summarize_file`   | Summarize a long file in a separate model call    | no         |
 
 - The tools are limited to the **Root folder** set in Settings (type it or pick it with **...**). Paths are resolved to their real location, so links and junctions cannot escape the root. With no root folder there are no file tools.
 - Write, move and delete tools only exist when **Allow file write / edit tools** is ticked.
@@ -135,27 +141,29 @@ Turn everything on or off with **Enable tools** in Settings. The model must supp
 - **Verify command** (Settings): runs after every tool round that changed files, for example `build.bat` or `npm test`. Its output is added to the tool result, so the model sees build errors straight away. It runs in the root folder without asking, because it is your own command.
 - Read-only tools called together in one round run in parallel.
 - Tool results are capped at 60,000 characters, and at about 40% of the free context (shared by the calls of one round). Command output keeps its end, where errors are; other output keeps its beginning. ANSI colours, progress redraws and repeated warning lines are removed from command output.
-- **Tool set** (Settings, or per profile): *All tools*, *Chat* (date, memory, guides, `ask_user` and MCP only) or *None*.
+- **Tool set** (Settings, or per profile): _All tools_, _Chat_ (date, memory, guides, `ask_user` and MCP only) or _None_.
 - `read_file`, `summarize_file` and attachments read **PDF, DOCX and XLSX** as text, using a built-in decompressor and parsers (no other software needed):
-  - **PDF:** text per page (`--- page N ---`). Handles compressed streams, object streams and ToUnicode font maps.
-  - **Word:** paragraphs, with headings as `#`, list items as `-`, and table cells separated by `|`.
-  - **Excel:** every sheet, one line per row (`12: A12 | B12 | ...`).
+    - **PDF:** text per page (`--- page N ---`). Handles compressed streams, object streams and ToUnicode font maps.
+    - **Word:** paragraphs, with headings as `#`, list items as `-`, and table cells separated by `|`.
+    - **Excel:** every sheet, one line per row (`12: A12 | B12 | ...`).
 
-  Not supported: scanned PDFs (no text layer; llamac says so), encrypted PDFs, and the old `.doc` / `.xls` formats.
+    Not supported: scanned PDFs (no text layer; llamac says so), encrypted PDFs, and the old `.doc` / `.xls` formats.
+
 - `multi_edit` applies all its edits in memory first. If one does not match, nothing is written and the error names that edit. The approval dialog shows the diff of all edits together.
 - `find_symbol` finds definitions, not uses, in C/C++, C#, Java, JS/TS, Python, Go, Rust and similar languages. It recognises functions, methods, classes, structs, typedefs, `#define`s and `const`/`let` assignments. Declarations (C prototypes) are marked.
 - `summarize_file` sends the file, or for long files up to 12 parts followed by a merge step, to the model in separate requests. Only the summary enters the conversation. **Summary budget** caps the model's thinking. With **Keep KV cache per chat**, the chat's cache is moved to another slot, or saved and restored, around the summary.
 
 ### Other built-in tools
 
-| Tool          | Purpose | Asks first |
-| ------------- | ------- | ---------- |
-| `system_info` | Windows version, CPU, RAM, GPU, drives, locale and the developer tools found on PATH (no user or computer names) | no |
-| `ask_user`    | The model asks you a question, with up to 8 answers to click or your own text, instead of guessing | no (it is a question to you) |
-| `update_plan` | The model keeps a checklist for a multi-step task. The chat shows it with ☑ done, ▶ current and ☐ pending | no |
+| Tool          | Purpose                                                                                                             | Asks first                         |
+| ------------- | ------------------------------------------------------------------------------------------------------------------- | ---------------------------------- |
+| `system_info` | Windows version, CPU, RAM, GPU, drives, locale and the developer tools found on PATH (no user or computer names)    | no                                 |
+| `ask_user`    | The model asks you a question, with up to 8 answers to click or your own text, instead of guessing                  | no (it is a question to you)       |
+| `update_plan` | The model keeps a checklist for a multi-step task. The chat shows it with ☑ done, ▶ current and ☐ pending           | no                                 |
 | `screenshot`  | The model sees the screen or one window (by title). Only for vision models; the image is downscaled to 1280 px wide | **always**, even with auto-approve |
 
 `screenshot` exists only when **Allow screenshot tool** is ticked (off by default). The screen can show anything, including personal or confidential data, so every capture asks first. The image is saved in the chat with the tool result. It is sent to the model as a user message right after the tool results, because tool results can only carry text.
+
 - **Choosing a window:** the window is chosen by text in its title (LlamaC's own window included).
 - **No match:** the model is told only that nothing matched. The titles of your other open windows are never listed to it, because they can name documents, sites or customers.
 - **Tested** with a vision model (LFM3-VL 2B): it listed the buttons of the captured window correctly. That request used about 1,400 prompt tokens.
@@ -163,14 +171,15 @@ Turn everything on or off with **Enable tools** in Settings. The model must supp
 ### Switching built-in tools on and off
 
 The **Tools 18/21** button in the input box (and **Built-in tools...** in Settings) opens a list of the built-in tools available with the current settings. Each row shows a checkbox, the tool's purpose and its approximate cost in tokens per request, and a total at the bottom. Hover the name or the shortened purpose to see the full description.
+
 - **Unticked tools** are not sent to the model. If the model still calls one, for example because it saw it earlier in the chat, the call is refused.
 - **Saved** in the settings, and in a profile when you **Save** the profile. A coding profile can keep the file tools, while a chat profile drops them.
 - **The estimate** uses the model's measured characters per token. For a model not used yet it is rough until the first reply.
 - **Tested:** unticking `list_directory`, `read_file` and `search_files` lowered the tool definitions from 2,070 to 1,727 tokens (server tokenizer).
 
-MCP tools are switched per server with the **MCP** button. **Tool set** still applies on top: with *Chat* or *None*, fewer tools are sent, whatever is ticked.
+MCP tools are switched per server with the **MCP** button. **Tool set** still applies on top: with _Chat_ or _None_, fewer tools are sent, whatever is ticked.
 
-Every built-in tool definition costs tokens in every request. In a new chat with Tool set *All*, the prompt grew by roughly 700 tokens with these tools; that figure comes from prompt sizes and includes two small test MCP servers. Use Tool set *Chat* or *None* when you do not need them.
+Every built-in tool definition costs tokens in every request. In a new chat with Tool set _All_, the prompt grew by roughly 700 tokens with these tools; that figure comes from prompt sizes and includes two small test MCP servers. Use Tool set _Chat_ or _None_ when you do not need them.
 
 ### Guides
 
@@ -237,25 +246,26 @@ With **Auto-compress when context is low** ticked, llamac keeps long chats withi
 - **Waiting:** a message sent, or a tool round started, while a needed compression runs waits for it, so the request is built from the compressed chat. **Stop** cancels the wait and the compression, and closing the request stops the server generating.
 - **If it fails,** the status bar shows the reason (server unreachable, timeout, HTTP error, empty reply). The same chat is not retried until it has grown by a few more messages.
 - **Fitting:** with **Fit requests into the context** ticked, a request that would still not fit is adjusted when it is sent, without changing the chat. In order, llamac:
-  1. shortens old tool results;
-  2. shortens the current turn's tool results except the newest two;
-  3. clips what is still too large (keeping its beginning and end);
-  4. as a last resort, leaves out whole early turns.
+    1. shortens old tool results;
+    2. shortens the current turn's tool results except the newest two;
+    3. clips what is still too large (keeping its beginning and end);
+    4. as a last resort, leaves out whole early turns.
 
-  A single huge tool result therefore no longer causes a server error.
+    A single huge tool result therefore no longer causes a server error.
+
 - **What is in the context:** click the gauge right of the status bar. It shows token counts from the server's tokenizer for the system prompt, memory, summary, tool definitions, messages, tool results and attachments, the largest tool results, and the model's statistics. It also has buttons to shorten old tool results or compress now.
 
 ## Getting the most from small models
 
 Small (9B-35B) models lose track of instructions in long contexts, choose wrong tools when they have many, and often get whitespace wrong when editing. These settings address that:
 
-- **Tool set** *Chat* or *None* for conversations that need no files: with every built-in tool on, the tool definitions take about 2k tokens per request. The **Tools** button shows the cost of each tool and switches single tools off.
+- **Tool set** _Chat_ or _None_ for conversations that need no files: with every built-in tool on, the tool definitions take about 2k tokens per request. The **Tools** button shows the cost of each tool and switches single tools off.
 - **Reminder** (in a profile): a line such as "Answer in Hungarian. Keep it short." is appended to your latest message when it is sent. It is not stored, and the prompt cache stays valid.
 - **Guides** instead of a long system prompt (see [Guides](#guides)).
 - **Think budget** (sampling) and **Summary budget** limit reasoning tokens (`reasoning_budget_tokens`, recent llama-server builds).
 - **Profiles:** **Save** next to the prompt name stores the prompt with the reminder, tool set, temperature, top-k, top-p, min-p, think budget and kwargs. Picking the profile sets them all. This fits per-model recommended sampling values.
 - **Edit reply:** correct the one wrong step of an answer and let the model continue from there (llama-server continues a final assistant message), instead of regenerating everything.
-- **Token confidence** (Display): needs requests without tools (Tool set *None*), because llama-server does not stream token probabilities together with tools. Words below 50% are shaded, and strongly below 20%. Clicking one lists the alternatives and their probabilities. Picking one keeps the answer up to that word and continues from the alternative, as a new branch.
+- **Token confidence** (Display): needs requests without tools (Tool set _None_), because llama-server does not stream token probabilities together with tools. Words below 50% are shaded, and strongly below 20%. Clicking one lists the alternatives and their probabilities. Picking one keeps the answer up to that word and continues from the alternative, as a new branch.
 - **Per-model statistics** (`data\model_stats.json`, shown in the context window): replies cut at max tokens, invalid tool arguments, `edit_file` misses and whitespace-tolerant matches. The measured characters per token make the context estimates and the fitting accurate for each model.
 
 ### KV cache per chat
@@ -294,15 +304,15 @@ Then rebuild.
 
 ## Keyboard shortcuts
 
-| Shortcut       | Action         |
-| -------------- | -------------- |
-| `Ctrl+Shift+N` | New chat       |
-| `Ctrl+Shift+D` | Delete chat    |
-| `Ctrl+K`       | Search chats   |
-| `Ctrl+B`       | Toggle sidebar |
-| `Enter` while the model works | Queue the message (Stop puts it back in the box) |
-| `Ctrl+V`       | Paste text, a screenshot (attached as PNG) or files copied in Explorer |
-| `Shift+F10`    | Menu for the selected chat in the list (right-click works too) |
+| Shortcut                      | Action                                                                 |
+| ----------------------------- | ---------------------------------------------------------------------- |
+| `Ctrl+Shift+N`                | New chat                                                               |
+| `Ctrl+Shift+D`                | Delete chat                                                            |
+| `Ctrl+K`                      | Search chats                                                           |
+| `Ctrl+B`                      | Toggle sidebar                                                         |
+| `Enter` while the model works | Queue the message (Stop puts it back in the box)                       |
+| `Ctrl+V`                      | Paste text, a screenshot (attached as PNG) or files copied in Explorer |
+| `Shift+F10`                   | Menu for the selected chat in the list (right-click works too)         |
 
 ## Project layout
 
@@ -365,14 +375,14 @@ For developers: building with `/DLLAMAC_TOOLTEST` adds `llamac.exe --tool <name>
 
 ## How it talks to the server
 
-| Endpoint                    | Purpose                                                                                 |
-| --------------------------- | --------------------------------------------------------------------------------------- |
-| `POST /v1/chat/completions` | Streaming chat (`stream: true`, `timings_per_token: true`, `return_progress: true`), the compression summary and `summarize_file` |
-| `GET /v1/models`            | The model list                                                                          |
-| `GET /props`                | Server default sampling values, context size, vision support and slot count            |
-| `POST /apply-template`      | Renders the chat template without running inference                                     |
-| `POST /tokenize`            | Token counts in the context window                                                     |
-| `POST /slots/0?action=save` / `restore` | KV cache per chat (optional, needs `--slot-save-path`)                     |
+| Endpoint                                | Purpose                                                                                                                           |
+| --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /v1/chat/completions`             | Streaming chat (`stream: true`, `timings_per_token: true`, `return_progress: true`), the compression summary and `summarize_file` |
+| `GET /v1/models`                        | The model list                                                                                                                    |
+| `GET /props`                            | Server default sampling values, context size, vision support and slot count                                                       |
+| `POST /apply-template`                  | Renders the chat template without running inference                                                                               |
+| `POST /tokenize`                        | Token counts in the context window                                                                                                |
+| `POST /slots/0?action=save` / `restore` | KV cache per chat (optional, needs `--slot-save-path`)                                                                            |
 
 Only parameters you set in the client are included in the request. When tools are enabled, the request also carries the `tools` array, and tool results are sent back as `tool` messages.
 

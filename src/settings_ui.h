@@ -435,7 +435,17 @@ static LRESULT CALLBACK SetProc(HWND h, UINT m, WPARAM w, LPARAM l)
         else if (LOWORD(w) == IDC_SYSDEL)
             sysp_on_delete(h);
         else if (LOWORD(w) == IDC_TOOLSDLG)
-            tools_dialog(h, s_tooloff, sizeof s_tooloff);
+        { /* show the dialog for the tool set and Enable tools as chosen here, not yet applied */
+            int fs = fidx("toolset"), fo = fidx("tools"), set = G.toolset, on = G.tools_on;
+            if (fs >= 0 && setCtl[fs])
+            {
+                int s = (int)SendMessageW(setCtl[fs], CB_GETCURSEL, 0, 0);
+                set = s < 0 ? 0 : s;
+            }
+            if (fo >= 0 && setCtl[fo])
+                on = SendMessageW(setCtl[fo], BM_GETCHECK, 0, 0) == BST_CHECKED;
+            tools_dialog(h, s_tooloff, sizeof s_tooloff, set, on);
+        }
         else if (LOWORD(w) == IDC_BROWSE_FS || LOWORD(w) == IDC_BROWSE_KV)
         {
             int fi = fidx(LOWORD(w) == IDC_BROWSE_FS ? "fsroot" : "kvdir");

@@ -125,15 +125,19 @@ static void name_list_set(char *list, size_t cap, const char *name, int in)
 /* Tool set 1 ("chat"): no file or shell tools - fewer, cheaper tool definitions and fewer wrong tool choices for
    small models. MCP tools stay, since the user configured them on purpose. Built-in tools the user switched off in
    the Tools dialog are never sent. */
-static int tool_in_set(const Tool *t)
+static int toolset_allows(int set, const Tool *t) /* the tool set alone, ignoring the Tools dialog's off list */
 {
-    if (G.toolset == 2)
+    if (set == 2)
         return 0;
-    if (t->kind == 0 && name_in_list(G.tooloff, t->name))
-        return 0;
-    if (G.toolset == 1 && t->kind == 0)
+    if (set == 1 && t->kind == 0)
         return !strcmp(t->rname, "get_datetime") || !strncmp(t->rname, "memory_", 7) || !strcmp(t->rname, "read_guide") || !strcmp(t->rname, "ask_user");
     return 1;
+}
+static int tool_in_set(const Tool *t)
+{
+    if (t->kind == 0 && name_in_list(G.tooloff, t->name))
+        return 0;
+    return toolset_allows(G.toolset, t);
 }
 /* "tools" array for the chat completion request (NULL = send no tools) */
 static char *tools_schema_build(void)
