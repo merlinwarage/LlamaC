@@ -105,7 +105,7 @@ static void rrect(HDC dc, const RECT *r, int rad, COLORREF fill, COLORREF line)
 }
 /* the bottom dock: composer buttons (+, T, M) are glyphs with an optional count badge ("T\t18/22"), Send is an
    arrow / stop square, the actions row is small quiet text; Delete buttons turn red on hover */
-static int is_tool_glyph(int id) { return id == IDC_ATTACH || id == IDC_TOOLSBTN || id == IDC_MCPBTN; }
+static int is_tool_glyph(int id) { return id == IDC_ATTACH || id == IDC_TOOLSBTN || id == IDC_MCPBTN || id == IDC_THINKBTN; }
 static int is_action(int id) { return (id >= IDC_REGEN && id <= IDC_COPY && id != IDC_SEND && id != IDC_ATTACH) || id == IDC_DELC || id == IDC_EDITREPLY; }
 static void draw_dock_btn_dc(DRAWITEMSTRUCT *d);
 static void draw_dock_btn(DRAWITEMSTRUCT *d)
@@ -180,13 +180,13 @@ static void draw_dock_btn_dc(DRAWITEMSTRUCT *d)
             g.bottom -= 11; /* glyph up, badge below */
             b.top = b.bottom - 17;
         }
-        SelectObject(dc, hFontI);
+        SelectObject(dc, id == IDC_THINKBTN ? hFontSym : hFontI);
         SetTextColor(dc, hot ? cFg : cDim);
         DrawTextW(dc, t, -1, &g, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
         if (badge)
         {
             SelectObject(dc, hFontXS);
-            SetTextColor(dc, cAccent);
+            SetTextColor(dc, id == IDC_THINKBTN && G.nothink ? cDim : cAccent);
             DrawTextW(dc, badge, -1, &b, DT_CENTER | DT_TOP | DT_SINGLELINE | DT_NOPREFIX);
         }
         return;

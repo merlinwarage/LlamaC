@@ -253,6 +253,34 @@ static void t_tool_image(Cfg *g)
     conv_free(c);
 }
 
+/* Think button off: enable_thinking false, merged with the user's kwargs, which cannot turn it back on */
+static void t_nothink(Cfg *g)
+{
+    Conv *c = agent_chat(1, 100);
+    char *b;
+    g_req_lim = 0;
+    b = build_request(c, g);
+    CHECK(strstr(b, "enable_thinking") == NULL); /* default: nothing sent */
+    free(b);
+    g->nothink = 1;
+    b = build_request(c, g);
+    CHECK(valid_json(b));
+    CHECK(strstr(b, "\"chat_template_kwargs\":{\"enable_thinking\":false}") != NULL);
+    free(b);
+    strcpy(g->kwargs, "{\"enable_thinking\":true,\"x\":{\"y\":[1,\"z\"]}}");
+    b = build_request(c, g);
+    CHECK(valid_json(b));
+    CHECK(strstr(b, "\"chat_template_kwargs\":{\"enable_thinking\":false,\"x\":{\"y\":[1,\"z\"]}}") != NULL);
+    dump("nothink", b);
+    free(b);
+    g->nothink = 0;
+    b = build_request(c, g);
+    CHECK(strstr(b, "\"chat_template_kwargs\":{\"enable_thinking\":true,") != NULL); /* the user's kwargs as before */
+    free(b);
+    g->kwargs[0] = 0;
+    conv_free(c);
+}
+
 int main(int argc, char **argv)
 {
     Cfg g;
@@ -265,6 +293,7 @@ int main(int argc, char **argv)
     t_logprobs(&g);
     t_prefill(&g);
     t_tool_image(&g);
+    t_nothink(&g);
     printf("%d checks, %d failed\n", runs, fails);
     return fails != 0;
 }

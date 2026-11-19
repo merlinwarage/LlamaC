@@ -30,6 +30,7 @@ typedef struct
     char mcpoff[1024];                       /* MCP servers switched off in the input box menu: "|name|name|" */
     int shot;                                /* 1 = offer the screenshot tool (asks every time) */
     char tooloff[1024];                      /* built-in tools switched off in the Tools dialog: "|name|name|" */
+    int nothink;                             /* 1 = thinking switched off in the input box: chat_template_kwargs enable_thinking false */
 } Cfg;
 /* kind: 0 text, 1 number override (string, empty = server default), 2 integer, 3 checkbox */
 typedef struct
@@ -89,6 +90,7 @@ static const Field FIELDS[] = {
     FLD("mcpoff", NULL, 0, mcpoff, NULL, NULL), /* no settings control: set from the MCP button */
     FLD("shot", "Allow screenshot tool (asks every time)", 3, shot, NULL, NULL),
     FLD("tooloff", NULL, 0, tooloff, NULL, NULL), /* no settings control: the Tools dialog */
+    FLD("nothink", NULL, 2, nothink, NULL, NULL), /* no settings control: the Think button in the input box */
 };
 #define NFIELDS ((int)(sizeof FIELDS / sizeof FIELDS[0]))
 static int fidx(const char *key)

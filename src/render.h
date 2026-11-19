@@ -2,6 +2,11 @@
 #ifndef LLAMAC_RENDER_H
 #define LLAMAC_RENDER_H
 
+static COLORREF blend(COLORREF a, COLORREF b, int pct)
+{
+    return RGB(GetRValue(a) + (GetRValue(b) - GetRValue(a)) * pct / 100, GetGValue(a) + (GetGValue(b) - GetGValue(a)) * pct / 100,
+               GetBValue(a) + (GetBValue(b) - GetBValue(a)) * pct / 100);
+}
 /* ---------- collapsible thinking block ---------- */
 static void render_think(const char *txt, size_t n)
 {
@@ -53,15 +58,6 @@ static void app_amort(char **d, size_t *len, size_t *cap, const char *s)
     }
     memcpy(*d + *len, s, b + 1);
     *len += b;
-}
-static int at_bottom(void)
-{
-    SCROLLINFO si;
-    memset(&si, 0, sizeof si);
-    si.cbSize = sizeof si;
-    si.fMask = SIF_RANGE | SIF_PAGE | SIF_POS;
-    GetScrollInfo(hChat, SB_VERT, &si);
-    return si.nPos + (int)si.nPage >= si.nMax - 8;
 }
 /* offset of the end of the chat text (where the next re_add() writes) */
 static LONG re_len(void)
@@ -126,6 +122,10 @@ static int fade_tick(void)
 {
     DWORD now = GetTickCount();
     int n = 0;
+    ScrollKeep k;
+    if (!g_nfade)
+        return 0;
+    keep_begin(&k);
     for (int i = 0; i < g_nfade; i++)
     {
         Fade f = g_fade[i];
@@ -141,6 +141,7 @@ static int fade_tick(void)
             g_fade[n++] = f;
     }
     g_nfade = n;
+    keep_end(&k);
     return n > 0;
 }
 
@@ -192,6 +193,211 @@ static void live_commit(void)
     free(seg);
 }
 
+/* ---------- live thinking block (while the model reasons, before the answer starts) ----------
+   An animated header line "<spinner> Thinking... 12s" at the end of the chat: a cycling glyph with a pulsing colour
+   and a highlight sweeping over the word (timer 4). With "Show reasoning blocks" on, a fixed-height box of LT_LINES
+   visual lines follows it: the reasoning text is appended at its end and whole lines are cut from its top, so the
+   text scrolls inside the box while the box keeps its height. When the answer starts, the block is replaced by the
+   ordinary collapsed thinking block (or just removed when reasoning is hidden).
+   Layout: [ha,hb) header text, "\r", [ta,tb) reasoning tail, [tb,pe) padding "\r"s. Nothing follows pe while on. */
+#define LT_LINES 6
+#define LT_TICK 110
+static struct
+{
+    int on, box, frame, nl; /* nl: the box text ends with a newline (or is empty) */
+    LONG ha, hb, ta, tb, pe;
+} g_lt;
+static int g_gen_live;   /* a generation is streaming (set by start_gen_px, cleared when it ends) */
+static DWORD g_think_t0; /* tick of the running generation's first reasoning text, 0 = none yet */
+static int g_lt_timer;
+static void lt_del(LONG a, LONG b)
+{
+    if (b <= a)
+        return;
+    SendMessageW(hChat, EM_SETSEL, (WPARAM)a, (LPARAM)b);
+    SendMessageW(hChat, EM_REPLACESEL, FALSE, (LPARAM)L"");
+}
+static void lt_color(LONG a, LONG b, COLORREF col)
+{
+    CHARFORMAT2W cf;
+    memset(&cf, 0, sizeof cf);
+    cf.cbSize = sizeof cf;
+    cf.dwMask = CFM_COLOR;
+    cf.crTextColor = col;
+    SendMessageW(hChat, EM_SETSEL, (WPARAM)a, (LPARAM)b);
+    SendMessageW(hChat, EM_SETCHARFORMAT, SCF_SELECTION, (LPARAM)&cf);
+}
+/* (re)writes the header; the text after it moves by the change in length */
+static void lt_header(void)
+{
+    static const wchar_t frames[] = L"\x2722\x2733\x2736\x273B\x273D\x273B\x2736\x2733"; /* spinner, back and forth */
+    static const char word[] = "Thinking\xE2\x80\xA6";                                    /* 9 characters on screen */
+    int f = g_lt.frame, nfr = (int)(sizeof frames / sizeof frames[0]) - 1, tri, sweep;
+    char gl[8], tm[40];
+    wchar_t gw[2];
+    LONG old = g_lt.hb, ws;
+    DWORD secs = g_think_t0 ? (GetTickCount() - g_think_t0) / 1000 : 0;
+    gw[0] = frames[f % nfr];
+    gw[1] = 0;
+    WideCharToMultiByte(CP_UTF8, 0, gw, -1, gl, sizeof gl, NULL, NULL);
+    if (secs >= 60)
+        snprintf(tm, sizeof tm, "   %lum %02lus", (unsigned long)(secs / 60), (unsigned long)(secs % 60));
+    else
+        snprintf(tm, sizeof tm, "   %lus", (unsigned long)secs);
+    tri = f % 16 < 8 ? f % 16 : 16 - f % 16; /* 0..8..0: the glyph's colour pulses */
+    lt_del(g_lt.ha, g_lt.hb);
+    re_at = g_lt.ha;
+    re_add(gl, strlen(gl), blend(cDim, cAccent, 40 + tri * 60 / 8), CFE_BOLD, L"Segoe UI Symbol");
+    re_add(" ", 1, cDim, 0, FACE);
+    ws = re_at;
+    re_add(word, strlen(word), cDim, CFE_BOLD, FACE);
+    re_add(tm, strlen(tm), cDim, 0, FACE);
+    g_lt.hb = re_at;
+    re_at = -1;
+    sweep = f % 14 - 3; /* a highlight moves over the word, with a pause between sweeps */
+    for (int i = 0; i < 9; i++)
+    {
+        int d = i > sweep ? i - sweep : sweep - i, pct = d >= 3 ? 0 : 100 - d * 40;
+        if (pct)
+            lt_color(ws + i, ws + i + 1, blend(cDim, cFg, pct));
+    }
+    g_lt.ta += g_lt.hb - old;
+    g_lt.tb += g_lt.hb - old;
+    g_lt.pe += g_lt.hb - old;
+}
+/* keeps the box at LT_LINES visual lines: cut whole lines from the top, pad below the text */
+static void lt_fit(void)
+{
+    LONG l0 = (LONG)SendMessageW(hChat, EM_EXLINEFROMCHAR, 0, (LPARAM)g_lt.ta);
+    LONG l1 = (LONG)SendMessageW(hChat, EM_EXLINEFROMCHAR, 0, (LPARAM)g_lt.tb);
+    LONG lines = l1 - l0 + 1, want, have;
+    if (lines > LT_LINES)
+    {
+        LONG cut = (LONG)SendMessageW(hChat, EM_LINEINDEX, (WPARAM)(l0 + lines - LT_LINES), 0);
+        if (cut > g_lt.ta && cut <= g_lt.tb)
+        {
+            lt_del(g_lt.ta, cut);
+            g_lt.tb -= cut - g_lt.ta;
+            g_lt.pe -= cut - g_lt.ta;
+            lines = LT_LINES;
+        }
+    }
+    want = LT_LINES - lines + 1; /* the first "\r" ends the text's last line, each further one adds an empty line */
+    if (want < 1)
+        want = 1;
+    have = g_lt.pe - g_lt.tb;
+    if (want > have)
+    {
+        SB pad = {0};
+        for (LONG i = have; i < want; i++)
+            sb_putc(&pad, '\n');
+        re_at = g_lt.pe;
+        re_add(pad.p, pad.n, cDim, 0, FACE);
+        re_at = -1;
+        free(pad.p);
+    }
+    else if (want < have)
+        lt_del(g_lt.tb + want, g_lt.pe);
+    g_lt.pe = g_lt.tb + want;
+}
+static void lt_append(const char *s, size_t n)
+{
+    LONG was;
+    if (!g_lt.on || !g_lt.box)
+        return;
+    if (g_lt.ta == g_lt.tb)
+        while (n && (*s == '\n' || *s == '\r' || *s == ' '))
+            s++, n--; /* no empty lines at the top of the box */
+    if (n > 4000)
+    { /* only the tail can be visible */
+        s += n - 4000;
+        n = 4000;
+        while (n && ((unsigned char)*s & 0xC0) == 0x80)
+            s++, n--;
+    }
+    if (!n)
+        return;
+    { /* runs of newlines become one: blank lines would waste the box's few lines */
+        SB f = {0};
+        for (size_t i = 0; i < n; i++)
+        {
+            if (s[i] == '\r' || (s[i] == '\n' && g_lt.nl))
+                continue;
+            g_lt.nl = s[i] == '\n';
+            sb_putc(&f, s[i]);
+        }
+        if (f.n)
+        {
+            was = g_lt.tb;
+            re_at = g_lt.tb;
+            re_add(f.p, f.n, cDim, CFE_ITALIC, FACE);
+            g_lt.tb = re_at;
+            re_at = -1;
+            g_lt.pe += g_lt.tb - was;
+            lt_fit();
+        }
+        free(f.p);
+    }
+}
+/* starts the block at the end of the chat; text = reasoning received so far (shown in the box) */
+static void lt_begin(const char *text)
+{
+    if (g_lt.on)
+        return;
+    memset(&g_lt, 0, sizeof g_lt);
+    g_lt.on = 1;
+    g_lt.nl = 1;
+    g_lt.box = G.thoughts;
+    g_lt.ha = g_lt.hb = re_len();
+    re_nl();
+    g_lt.ta = g_lt.tb = g_lt.pe = re_len();
+    if (g_lt.box)
+    {
+        re_nl();
+        g_lt.pe = re_len();
+    }
+    lt_header();
+    if (g_lt.box)
+    {
+        lt_fit();
+        if (text && *text)
+            lt_append(text, strlen(text));
+    }
+    genPhase = 1;
+    if (!g_lt_timer)
+    {
+        SetTimer(hMain, 4, LT_TICK, NULL);
+        g_lt_timer = 1;
+    }
+}
+/* the answer starts (or an error / the end arrives): drop the live block, show the normal thinking block instead */
+static void lt_end(void)
+{
+    if (!g_lt.on)
+        return;
+    g_lt.on = 0;
+    if (g_lt.pe != re_len())
+        return; /* something was written after it: leave it to the next render_all() */
+    lt_del(g_lt.ha, g_lt.pe);
+    if (g_lt.box && cur && cur == genConv && genNode < cur->cnt)
+    {
+        g_rnode = genNode;
+        render_think(cur->n[genNode].reasoning, strlen(cur->n[genNode].reasoning));
+    }
+}
+/* timer 4: animate the header; returns 0 when the block is gone */
+static int lt_tick(void)
+{
+    ScrollKeep k;
+    if (!g_lt.on)
+        return 0;
+    keep_begin(&k);
+    g_lt.frame++;
+    lt_header();
+    keep_end(&k);
+    return 1;
+}
+
 /* show at most maxb bytes of the pending text (never splits a UTF-8 character); the rest waits for the next tick */
 static void flush_stream_n(size_t maxb)
 {
@@ -205,24 +411,21 @@ static void flush_stream_n(size_t maxb)
     }
     if (show)
     {
-        int follow = at_bottom();
+        ScrollKeep k;
+        keep_begin(&k);
         if (g_pend_kind == 1)
         {
-            if (genPhase != 1)
-            {
-                re_add("Thinking\n", 9, cDim, CFE_ITALIC | CFE_BOLD, FACE);
-                genPhase = 1;
-            }
-            re_add(g_pend.p, emit, cDim, CFE_ITALIC, FACE);
+            if (!g_lt.on && genPhase != 2)
+                lt_begin(NULL);
+            if (g_lt.on)
+                lt_append(g_pend.p, emit);
+            else
+                re_add(g_pend.p, emit, cDim, CFE_ITALIC, FACE); /* reasoning after the answer began: rare */
         }
         else
         {
             int fade = G.fade && emit && emit < 600; /* a big catch-up chunk just appears */
-            if (genPhase == 1)
-            {
-                re_nl();
-                re_nl();
-            }
+            lt_end();
             genPhase = 2;
             if (g_live_off < 0)
                 g_live_off = re_len();
@@ -234,8 +437,7 @@ static void flush_stream_n(size_t maxb)
             sb_add(&g_live, g_pend.p, emit);
             live_commit();
         }
-        if (follow)
-            SendMessageW(hChat, WM_VSCROLL, SB_BOTTOM, 0);
+        keep_end(&k);
     }
     else
         emit = n; /* not the visible chat: drop the pending text */
@@ -358,11 +560,6 @@ static int tok_skip(const char *s, int n)
         if (!strchr(" \t\r\n*_`#|>~-", s[i]))
             return 0;
     return 1; /* whitespace or markdown syntax: not visible as such */
-}
-static COLORREF blend(COLORREF a, COLORREF b, int pct)
-{
-    return RGB(GetRValue(a) + (GetRValue(b) - GetRValue(a)) * pct / 100, GetGValue(a) + (GetGValue(b) - GetGValue(a)) * pct / 100,
-               GetBValue(a) + (GetBValue(b) - GetBValue(a)) * pct / 100);
 }
 static void shade_tokens(int node, LONG a, LONG b)
 {
@@ -555,6 +752,16 @@ static void render_node(const int *p, int i, int n)
         re_add(b, strlen(b), cDim, 0, FACE);
     }
     g_rnode = p[i];
+    if (g_gen_live && busy && cur == genConv && p[i] == genNode)
+    { /* the generating message: still reasoning -> the live block (it is the last node, so the block ends the chat) */
+        int reasoning = m->reasoning[0] && !m->content[0] && !(m->tcalls && *m->tcalls);
+        genPhase = reasoning ? 1 : m->content[0] ? 2 : 0;
+        if (reasoning)
+        {
+            lt_begin(m->reasoning);
+            return;
+        }
+    }
     /* a summary node keeps the original prompt in `reasoning` (for the chat-list "Copy original prompt"); never shown here */
     if (!summ && G.thoughts)
         render_think(m->reasoning, strlen(m->reasoning));
@@ -580,10 +787,12 @@ static void render_all(void)
 {
     int *p = NULL, n = 0, start = 0;
     int key = (G.dark ? 1 : 0) | (G.thoughts ? 2 : 0) | (g_colw << 2);
+    ScrollKeep k;
     g_pend.n = 0;
     if (g_pend.p)
         g_pend.p[0] = 0;
     live_reset(); /* whatever was streamed is re-rendered from the node below */
+    g_lt.on = 0;  /* the live thinking block is part of the last message: removed with it, rebuilt by render_node */
     if (cur)
         n = conv_path(cur, &p);
     if (cur && cur == g_rd_conv && key == g_rd_key && n > 0 && g_rdn > 0)
@@ -599,6 +808,7 @@ static void render_all(void)
         if (start < 0)
             start = 0;
     }
+    keep_begin(&k);
     SendMessageW(hChat, WM_SETREDRAW, FALSE, 0);
     if (start == 0)
     {
@@ -653,7 +863,14 @@ static void render_all(void)
     g_rd_key = key;
     free(p);
     SendMessageW(hChat, WM_SETREDRAW, TRUE, 0);
-    SendMessageW(hChat, WM_VSCROLL, SB_BOTTOM, 0);
+    if (start == 0)
+    { /* another chat, or a full rebuild: start at the bottom, following */
+        g_follow = 1;
+        k.follow = 1;
+        k.sel.cpMin = k.sel.cpMax = 0;
+    }
+    k.frozen = 0; /* redraw is already back on, the repaint follows */
+    keep_end(&k); /* the same chat: bottom while following, else the view stays where the user scrolled */
     InvalidateRect(hChat, NULL, TRUE);
     InvalidateRect(hMain, &rcHead, FALSE);
 }

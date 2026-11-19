@@ -437,15 +437,21 @@ static void think_toggle(int id)
         return;
     Think *t = &thinks[id];
     CHARRANGE sv;
+    POINT sp;
     SendMessageW(hChat, EM_EXGETSEL, 0, (LPARAM)&sv);
+    SendMessageW(hChat, EM_GETSCROLLPOS, 0, (LPARAM)&sp); /* the block opens below the click: the view stays */
     SendMessageW(hChat, WM_SETREDRAW, FALSE, 0);
     t->collapsed = !t->collapsed;
     set_hidden(t->a, t->b + 1, t->collapsed);
     SendMessageW(hChat, EM_SETSEL, (WPARAM)t->hs, (LPARAM)(t->hs + 1));
     SendMessageW(hChat, EM_REPLACESEL, FALSE, (LPARAM)(t->collapsed ? L"\x25B8" : L"\x25BE"));
     SendMessageW(hChat, EM_EXSETSEL, 0, (LPARAM)&sv);
+    g_scroll_prog++;
+    SendMessageW(hChat, EM_SETSCROLLPOS, 0, (LPARAM)&sp);
+    g_scroll_prog--;
     SendMessageW(hChat, WM_SETREDRAW, TRUE, 0);
     InvalidateRect(hChat, NULL, FALSE);
+    g_follow = at_bottom(); /* opened at the bottom: the user reads it, streaming must not pull the view away */
     if (cur && t->node >= 0 && t->node < cur->cnt)
         cur->n[t->node].think_open = !t->collapsed;
 }
@@ -504,6 +510,21 @@ static LRESULT CALLBACK ChatSub(HWND h, UINT m, WPARAM w, LPARAM l, UINT_PTR id,
     }
 #endif
 
+    if (!g_scroll_prog && (m == WM_MOUSEWHEEL || m == WM_VSCROLL || m == WM_KEYDOWN))
+    { /* the user scrolls: up stops following the stream, back at the bottom follows again */
+        POINT a, b;
+        LRESULT r;
+        SendMessageW(h, EM_GETSCROLLPOS, 0, (LPARAM)&a);
+        r = DefSubclassProc(h, m, w, l);
+        SendMessageW(h, EM_GETSCROLLPOS, 0, (LPARAM)&b);
+        if (m == WM_MOUSEWHEEL && GET_WHEEL_DELTA_WPARAM(w) > 0 && a.y > 0)
+            g_follow = 0; /* even if the scroll is still animating */
+        else if (b.y < a.y)
+            g_follow = 0;
+        else if (b.y != a.y || m != WM_KEYDOWN)
+            g_follow = at_bottom();
+        return r;
+    }
     if (m == WM_DROPFILES)
     { /* files dropped on the chat view are attached to the next message */
         SendMessageW(hMain, WM_DROPFILES, w, l);

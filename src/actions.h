@@ -9,6 +9,24 @@ static void set_busy(int b)
     SetWindowTextW(B(IDC_SEND), b ? L"Stop" : L"Send");
     InvalidateRect(B(IDC_SEND), NULL, FALSE);
 }
+/* the Think button in the input box: off sends chat_template_kwargs {"enable_thinking": false} (request.h) */
+static void think_btn_update(void)
+{
+    HWND b = GetDlgItem(hMain, IDC_THINKBTN);
+    if (!b)
+        return;
+    SetWindowTextW(b, G.nothink ? L"\x273B\toff" : L"\x273B\ton"); /* glyph with an on / off badge */
+    main_tip(b, G.nothink ? "Thinking is OFF: requests send enable_thinking = false (chat template kwargs). Click to turn it on."
+                          : "Thinking is ON (the model's default). Click to send enable_thinking = false with the next requests.");
+    InvalidateRect(b, NULL, FALSE);
+}
+static void act_think(void)
+{
+    G.nothink = !G.nothink;
+    cfg_save();
+    think_btn_update();
+    set_status(G.nothink ? "Thinking off: the next request sends enable_thinking = false." : "Thinking on: enable_thinking is no longer sent.");
+}
 static int g_toolround; /* tool rounds used for the current user message */
 /* A generation requested while compression runs waits for it, so the request is built from the
    compressed conversation instead of the full one that is about to overflow. */
@@ -281,6 +299,8 @@ static int ctx_lim(void) { return G.ctx_limit > 0 ? G.ctx_limit : g_nctx; }
 static void start_gen_px(int parent, int cont, const char *prefill)
 {
     int lim = ctx_lim(), est;
+    if (!cont)
+        g_follow = 1; /* a new message (send, regenerate, edit): show it and follow the reply */
     cur->leaf = parent;
     est = est_tokens(cur);
     if (g_compacting && g_compact_early && !g_ccancel && (lim <= 0 || est < 0 || est <= ctx_trigger(lim)))
@@ -339,6 +359,8 @@ static void start_gen_px(int parent, int cont, const char *prefill)
     genConv = cur;
     genNode = a;
     genPhase = 0;
+    g_gen_live = 1;
+    g_think_t0 = 0;
     g_stop = 0;
     gl[1] = 0;
     gc[1] = 1;

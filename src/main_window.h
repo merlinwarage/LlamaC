@@ -161,9 +161,9 @@ static void layout(void)
             MoveWindow(B(IDC_DELM), xr - w2 - 2 - w1, yAct + 2, w1, actH - 4, TRUE);
         }
     }
-    { /* composer row: [+ | T | M] [input .........] [Send] - all DOCK_H tall; the input grows upwards */
-        int nb = G.tools_on ? 3 : 1, gw = nb * 42 + 2;
-        const int gids[] = {IDC_ATTACH, IDC_TOOLSBTN, IDC_MCPBTN};
+    { /* composer row: [+ | Think | T | M] [input .........] [Send] - all DOCK_H tall; the input grows upwards */
+        int nb = G.tools_on ? 4 : 2, gw = nb * 42 + 2;
+        const int gids[] = {IDC_ATTACH, IDC_THINKBTN, IDC_TOOLSBTN, IDC_MCPBTN};
         SetRect(&rcTools, left, yRow, left + gw, yRow + DOCK_H);
         for (int i = 0; i < nb; i++)
             MoveWindow(B(gids[i]), left + 3 + i * 42, yRow + 4, 38, DOCK_H - 8, TRUE);
@@ -265,9 +265,8 @@ static void paint_main(HWND h)
             FillRect(dc, &v, lb);
         }
         rrect(dc, &rcTools, 14, cSurf, cBorder);
-        if (G.tools_on)
-            for (int i = 1; i < 3; i++)
-            { /* thin separators between + / T / M */
+        for (int i = 1; i < (G.tools_on ? 4 : 2); i++)
+            { /* thin separators between + / Think / T / M */
                 RECT v = {rcTools.left + 1 + i * 42, rcTools.top + 12, rcTools.left + 2 + i * 42, rcTools.bottom - 12};
                 FillRect(dc, &v, lb);
             }
@@ -325,6 +324,7 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l)
         mkbtn(h, L"+", IDC_ATTACH);
         mkbtn(h, L"MCP", IDC_MCPBTN);
         mkbtn(h, L"Tools", IDC_TOOLSBTN);
+        mkbtn(h, L"\x273B", IDC_THINKBTN);
         mkbtn(h, L"Send", IDC_SEND);
         hFontS = CreateFontW(-13, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Segoe UI");
         hFontI = CreateFontW(-17, 0, 0, 0, FW_SEMIBOLD, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Segoe UI");
@@ -375,6 +375,7 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l)
     case WM_APP_INIT:
         layout();
         mcp_btn_update();
+        think_btn_update();
         tools_startup();
         tools_btn_update();
         set_status("Connecting...");
@@ -589,6 +590,9 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l)
         case IDC_TOOLSBTN:
             act_tools();
             break;
+        case IDC_THINKBTN:
+            act_think();
+            break;
         case IDC_QUEUE:
             act_queue();
             break;
@@ -632,6 +636,16 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l)
         {
             Node *n = &genConv->n[genNode];
             app_amort(g->kind ? &n->reasoning : &n->content, &gl[g->kind], &gc[g->kind], g->text);
+            if (g->kind == 1 && !g_think_t0)
+                g_think_t0 = GetTickCount();
+            if (cur == genConv && g->kind == 1 && !G.thoughts && !g_lt.on && genPhase != 2)
+            { /* reasoning hidden: only the animated "Thinking" line */
+                ScrollKeep k;
+                flush_stream();
+                keep_begin(&k);
+                lt_begin(NULL);
+                keep_end(&k);
+            }
             if (cur == genConv && (g->kind == 0 || G.thoughts))
             {
                 if (g_pend.n && g_pend_kind != g->kind)
@@ -694,12 +708,19 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l)
                 char b[700];
                 snprintf(b, sizeof b, "\n[Error] %s\n", g->text);
                 if (cur == genConv)
+                {
+                    ScrollKeep k;
+                    keep_begin(&k);
+                    lt_end();
                     re_add(b, strlen(b), cErr, 0, FACE);
+                    keep_end(&k);
+                }
                 set_status(g->text);
             }
             else if (g->kind == 4)
             {
                 int cont = 0;
+                g_gen_live = 0; /* the next render_all() shows the reply as finished (no live thinking block) */
                 if (g_timer_on)
                 {
                     KillTimer(h, 1);
@@ -1013,6 +1034,14 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l)
         {
             KillTimer(h, 2);
             refresh_list();
+        }
+        else if (w == 4)
+        {
+            if (!lt_tick())
+            {
+                KillTimer(h, 4);
+                g_lt_timer = 0;
+            }
         }
         return 0;
     case WM_CLOSE:

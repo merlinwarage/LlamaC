@@ -478,10 +478,24 @@ static char *build_request(Conv *c, const Cfg *g)
         sb_puts(&s, ",\"reasoning_format\":");
         sb_json(&s, g->rfmt);
     }
-    if (g->kwargs[0])
+    if (g->kwargs[0] || g->nothink)
     {
-        J *k = json_parse_strict(g->kwargs);
-        if (k && k->t == J_OBJ)
+        J *k = g->kwargs[0] ? json_parse_strict(g->kwargs) : NULL;
+        if (g->nothink)
+        { /* Think button off: enable_thinking false, merged with the user's kwargs (which may not override it) */
+            sb_puts(&s, ",\"chat_template_kwargs\":{\"enable_thinking\":false");
+            if (k && k->t == J_OBJ)
+                for (J *c = k->child; c; c = c->next)
+                    if (c->key && strcmp(c->key, "enable_thinking"))
+                    {
+                        sb_putc(&s, ',');
+                        sb_json(&s, c->key);
+                        sb_putc(&s, ':');
+                        j_dump(&s, c);
+                    }
+            sb_putc(&s, '}');
+        }
+        else if (k && k->t == J_OBJ)
             sb_printf(&s, ",\"chat_template_kwargs\":%s", g->kwargs);
         j_free(k);
     }
