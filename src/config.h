@@ -228,6 +228,9 @@ static void cfg_parse(Cfg *g, char *txt)
     for (char *ln = strtok(txt, "\n"); ln; ln = strtok(NULL, "\n"))
     {
         char *eq = strchr(ln, '=');
+        size_t ll = strlen(ln);
+        if (ll && ln[ll - 1] == '\r')
+            ln[ll - 1] = 0; /* a settings file saved with CRLF line ends (edited by hand) */
         if (!eq)
             continue;
         *eq = 0;

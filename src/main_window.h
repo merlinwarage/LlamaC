@@ -373,7 +373,7 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l)
             if (G.dark)
                 SetWindowTheme(g_mtt, L"DarkMode_Explorer", NULL);
         }
-        main_tip(B(IDC_ATTACH), "Attach files: images, audio, text, PDF, DOCX, XLSX. You can also drop files here or paste with Ctrl+V.");
+        main_tip(B(IDC_ATTACH), "Attach files: images, audio, text, PDF, DOCX, XLSX. You can also drop files here or paste with Ctrl+V. With attachments waiting, a click lists them: remove one or all, or add more.");
         main_tip(B(IDC_SEND), "Send (Enter). Shift+Enter starts a new line. While the model works this is Stop, and Enter queues your message.");
         main_tip(B(IDC_PREV), "Previous branch of this conversation");
         main_tip(B(IDC_NEXT), "Next branch of this conversation");
@@ -596,6 +596,8 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l)
             break;
         case IDC_ATTACH:
         {
+            if (npend && !attach_menu())
+                break; /* attachments waiting: the menu removes them or asks for more */
             wchar_t f[MAX_PATH] = L"";
             OPENFILENAMEW o;
             memset(&o, 0, sizeof o);

@@ -34,6 +34,67 @@ static void pend_status(void)
     set_status(sbs(&s));
     free(s.p);
 }
+static void pend_remove(int i)
+{
+    if (i < 0 || i >= npend)
+        return;
+    free(pend[i].name);
+    free(pend[i].data);
+    free(pend[i].mime);
+    memmove(&pend[i], &pend[i + 1], (size_t)(npend - i - 1) * sizeof(Att));
+    npend--;
+    if (npend)
+        pend_status();
+    else
+        set_status("Attachment removed");
+    attach_badge_refresh();
+}
+/* the + button while attachments are waiting: add more, or remove one / all. Returns 1 = open the file picker. */
+static int attach_menu(void)
+{
+    static const char *const KIND[] = {"image", "text", "audio"};
+    HWND b = B(IDC_ATTACH);
+    HMENU m = CreatePopupMenu();
+    RECT br;
+    int cmd;
+    AppendMenuW(m, MF_STRING, 1, L"Add files...");
+    AppendMenuW(m, MF_SEPARATOR, 0, NULL);
+    for (int i = 0; i < npend; i++)
+    {
+        const char *d = pend[i].data ? pend[i].data : "", *comma = strncmp(d, "data:", 5) ? NULL : strchr(d, ',');
+        size_t bytes = comma ? strlen(comma + 1) / 4 * 3 : strlen(d); /* base64 data URL or plain text */
+        SB lab = {0};
+        wchar_t *w;
+        sb_puts(&lab, "Remove  ");
+        for (const char *q = pend[i].name ? pend[i].name : "?"; *q; q++)
+            if (*q == '&')
+                sb_puts(&lab, "&&"); /* & would underline the next letter */
+            else if (*q != '\t')
+                sb_putc(&lab, *q); /* a tab would split the menu item */
+        sb_printf(&lab, "\t%s, %s%u KB", pend[i].kind >= 0 && pend[i].kind <= 2 ? KIND[pend[i].kind] : "file",
+                  bytes < 1024 ? "<" : "", (unsigned)(bytes < 1024 ? 1 : (bytes + 512) / 1024));
+        w = w_from(sbs(&lab));
+        AppendMenuW(m, MF_STRING, (UINT_PTR)(100 + i), w);
+        free(w);
+        free(lab.p);
+    }
+    if (npend > 1)
+    {
+        AppendMenuW(m, MF_SEPARATOR, 0, NULL);
+        AppendMenuW(m, MF_STRING, 2, L"Remove all");
+    }
+    GetWindowRect(b, &br);
+    cmd = (int)TrackPopupMenu(m, TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_BOTTOMALIGN, br.left, br.top - 2, 0, owner_wnd(), NULL);
+    DestroyMenu(m);
+    if (cmd == 2)
+    {
+        pend_clear();
+        set_status("Attachments removed");
+    }
+    else if (cmd >= 100 && cmd < 100 + npend)
+        pend_remove(cmd - 100);
+    return cmd == 1;
+}
 static void pend_add(int kind, const char *name, const char *data, const char *mime)
 {
     if (npend >= 16)
