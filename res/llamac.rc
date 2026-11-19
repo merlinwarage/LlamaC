@@ -1,0 +1,2 @@
+/* llamac.rc - app icon (res/llamac.ico, drawn by res/make_icon.py). build.bat compiles it with rc.exe. */
+1 ICON "llamac.ico"

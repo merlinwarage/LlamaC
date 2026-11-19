@@ -24,6 +24,11 @@ static void apply_frame(HWND h)
     DwmSetWindowAttribute(h, 34, &bd, sizeof bd);
     DwmSetWindowAttribute(h, 35, &cap, sizeof cap);
     DwmSetWindowAttribute(h, 36, &tx, sizeof tx);
+    if (g_icon) /* every top-level window of the app comes through here: give it the app icon */
+    {
+        SendMessageW(h, WM_SETICON, ICON_BIG, (LPARAM)g_icon);
+        SendMessageW(h, WM_SETICON, ICON_SMALL, (LPARAM)g_icon_sm);
+    }
 }
 static void set_theme(void)
 {
@@ -106,7 +111,7 @@ static void rrect(HDC dc, const RECT *r, int rad, COLORREF fill, COLORREF line)
 /* the bottom dock: composer buttons (+, T, M) are glyphs with an optional count badge ("T\t18/22"), Send is an
    arrow / stop square, the actions row is small quiet text; Delete buttons turn red on hover */
 static int is_tool_glyph(int id) { return id == IDC_ATTACH || id == IDC_TOOLSBTN || id == IDC_MCPBTN || id == IDC_THINKBTN; }
-static int is_action(int id) { return (id >= IDC_REGEN && id <= IDC_COPY && id != IDC_SEND && id != IDC_ATTACH) || id == IDC_DELC || id == IDC_EDITREPLY; }
+static int is_action(int id) { return (id >= IDC_REGEN && id <= IDC_COPY && id != IDC_SEND && id != IDC_ATTACH) || id == IDC_DELC || id == IDC_EDITREPLY || (id >= IDC_CP_COPY && id <= IDC_CP_HIDE); }
 static void draw_dock_btn_dc(DRAWITEMSTRUCT *d);
 static void draw_dock_btn(DRAWITEMSTRUCT *d)
 { /* double-buffered: drawn into a memory bitmap and copied in one step, so no half-drawn state is ever visible */
@@ -201,7 +206,7 @@ static void draw_btn(DRAWITEMSTRUCT *d)
     HDC dc = d->hDC;
     RECT r = d->rcItem;
     int pressed = (d->itemState & ODS_SELECTED) != 0, hot = (d->hwndItem == hHot);
-    if (GetParent(d->hwndItem) == hMain && (id == IDC_SEND || is_tool_glyph(id) || is_action(id)))
+    if ((GetParent(d->hwndItem) == hMain || (hPanel && GetParent(d->hwndItem) == hPanel)) && (id == IDC_SEND || is_tool_glyph(id) || is_action(id)))
     {
         draw_dock_btn(d);
         return;

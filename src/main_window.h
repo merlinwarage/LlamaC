@@ -4,9 +4,6 @@
 
 /* ---------- main window ---------- */
 static int g_gauge_last = -1;
-#define DOCK_H 48        /* composer row: buttons, input (1 line) and Send are this tall */
-static int g_boxH = DOCK_H; /* input box height: grows with the text, up to 6 lines */
-static int g_lineH = 20;
 /* width of a text button in the actions row */
 static int act_w(int id)
 {
@@ -39,6 +36,13 @@ static void input_autosize(void)
 }
 static LRESULT CALLBACK InputProc(HWND h, UINT m, WPARAM w, LPARAM l)
 {
+    if (m == WM_KEYDOWN && w == VK_ESCAPE && g_cp_on)
+    { /* Esc hides the copilot panel */
+        cp_hide();
+        return 0;
+    }
+    if (m == WM_CHAR && w == 27 && g_cp_on)
+        return 0; /* no beep for the Esc above */
     if (m == WM_CHAR)
     {
         if (w == L'\r' && !(GetKeyState(VK_SHIFT) & 0x8000))
@@ -91,6 +95,11 @@ static LRESULT CALLBACK InputProc(HWND h, UINT m, WPARAM w, LPARAM l)
 static void layout(void)
 {
     RECT rc;
+    if (g_cp_on)
+    { /* the composer and the chat view are in the copilot panel */
+        cp_relayout();
+        return;
+    }
     GetClientRect(hMain, &rc);
     int W = rc.right, H = rc.bottom;
     if (W < 100 || H < 100)
@@ -278,8 +287,25 @@ static void paint_main(HWND h)
 }
 static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l)
 {
+    if (g_msgTaskbar && m == g_msgTaskbar)
+    { /* Explorer restarted: the tray icon is gone */
+        g_cp_tray = 0;
+        if (G.copilot)
+            cp_tray(1);
+        return 0;
+    }
     switch (m)
     {
+    case WM_HOTKEY:
+        if (w == CP_HK_ID)
+            cp_toggle(1);
+        return 0;
+    case WM_APP_TRAY:
+        if (LOWORD(l) == WM_LBUTTONUP)
+            cp_toggle(0);
+        else if (LOWORD(l) == WM_RBUTTONUP || LOWORD(l) == WM_CONTEXTMENU)
+            cp_tray_menu();
+        return 0;
     case WM_CREATE:
     {
         hMain = h;
@@ -385,8 +411,16 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l)
         select_conv(convs[0]);
         refresh_models();
         SetFocus(hInput);
+        cp_apply(); /* copilot mode: tray icon and hotkey */
+        if (G.copilot)
+            cp_show(); /* the main window stays hidden (WinMain did not show it) */
         return 0;
     case WM_SIZE:
+        if (w == SIZE_MINIMIZED && G.copilot)
+        { /* copilot mode: minimized = in the tray */
+            ShowWindow(h, SW_HIDE);
+            return 0;
+        }
         if (B(IDC_SEND))
             layout();
         return 0;
@@ -566,7 +600,7 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l)
             OPENFILENAMEW o;
             memset(&o, 0, sizeof o);
             o.lStructSize = sizeof o;
-            o.hwndOwner = h;
+            o.hwndOwner = owner_wnd();
             o.lpstrFile = f;
             o.nMaxFile = MAX_PATH;
             o.Flags = OFN_FILEMUSTEXIST;
@@ -615,6 +649,8 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l)
             do_send();
             break;
         case IDC_FIND:
+            if (g_cp_on)
+                break; /* Ctrl+K in the copilot panel: the sidebar is in the hidden main window */
             if (!sbVisible)
             {
                 sbVisible = 1;
@@ -623,6 +659,8 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l)
             SetFocus(hSearch);
             break;
         case IDC_SIDEBAR:
+            if (g_cp_on)
+                break;
             sbVisible = !sbVisible;
             layout();
             break;
@@ -1045,6 +1083,11 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l)
         }
         return 0;
     case WM_CLOSE:
+        if (G.copilot && !g_cp_exit)
+        { /* copilot mode: closing the window keeps LlamaC in the tray (Exit is in the tray menu) */
+            ShowWindow(h, SW_HIDE);
+            return 0;
+        }
         if (busy)
             stop_gen();
         compact_cancel();
@@ -1061,6 +1104,9 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l)
         }
         return 0;
     case WM_DESTROY:
+        cp_tray(0);
+        if (g_cp_hk)
+            UnregisterHotKey(h, CP_HK_ID);
         PostQuitMessage(0);
         return 0;
     }
@@ -1115,7 +1161,14 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE hp, PWSTR cl, int show)
     wc.hCursor = LoadCursorW(NULL, IDC_ARROW);
     wc.hbrBackground = hbrBg;
     wc.lpszClassName = L"LlamaC";
-    wc.hIcon = LoadIconW(NULL, IDI_APPLICATION);
+    g_icon = (HICON)LoadImageW(hi, MAKEINTRESOURCEW(1), IMAGE_ICON, GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON), 0);
+    g_icon_sm = (HICON)LoadImageW(hi, MAKEINTRESOURCEW(1), IMAGE_ICON, GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), 0);
+    if (!g_icon)
+        g_icon = LoadIconW(NULL, IDI_APPLICATION);
+    if (!g_icon_sm)
+        g_icon_sm = g_icon;
+    wc.hIcon = g_icon;
+    wc.hIconSm = g_icon_sm;
     RegisterClassExW(&wc);
     HWND w = CreateWindowExW(0, L"LlamaC", L"LlamaC", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, CW_USEDEFAULT, CW_USEDEFAULT, 1280, 820, NULL, NULL, hi, NULL);
     if (!w)
@@ -1127,8 +1180,11 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE hp, PWSTR cl, int show)
         {FVIRTKEY | FCONTROL, 'B', IDC_SIDEBAR},
     };
     hAcc = CreateAcceleratorTableW(ac, 4);
-    ShowWindow(w, show);
-    UpdateWindow(w);
+    if (!G.copilot)
+    { /* copilot mode starts in the tray with the panel (WM_APP_INIT) */
+        ShowWindow(w, show);
+        UpdateWindow(w);
+    }
     MSG msg;
     timeBeginPeriod(1);
     while (GetMessageW(&msg, NULL, 0, 0) > 0)

@@ -12,7 +12,7 @@ static void set_busy(int b)
 /* the Think button in the input box: off sends chat_template_kwargs {"enable_thinking": false} (request.h) */
 static void think_btn_update(void)
 {
-    HWND b = GetDlgItem(hMain, IDC_THINKBTN);
+    HWND b = B(IDC_THINKBTN);
     if (!b)
         return;
     SetWindowTextW(b, G.nothink ? L"\x273B\toff" : L"\x273B\ton"); /* glyph with an on / off badge */
@@ -619,7 +619,7 @@ static void act_delconv(void)
 {
     if (busy || !cur)
         return;
-    if (MessageBoxW(hMain, L"Delete this conversation?", L"llamac", MB_YESNO | MB_ICONQUESTION) != IDYES)
+    if (MessageBoxW(owner_wnd(), L"Delete this conversation?", L"llamac", MB_YESNO | MB_ICONQUESTION) != IDYES)
         return;
     for (int i = 0; i < nconv; i++)
         if (convs[i] == cur)
@@ -776,7 +776,7 @@ static char *ask_text(const wchar_t *title, const wchar_t *okLabel, const char *
 {
     static int reg = 0;
     RECT r;
-    HWND h, e;
+    HWND h, e, ow;
     MSG msg;
     SB c = {0};
     wchar_t *wi;
@@ -793,9 +793,17 @@ static char *ask_text(const wchar_t *title, const wchar_t *okLabel, const char *
         RegisterClassExW(&wc);
         reg = 1;
     }
-    GetWindowRect(hMain, &r);
-    h = CreateWindowExW(WS_EX_DLGMODALFRAME, L"LCAskTxt", title, WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME,
-                        r.left + 80, r.top + 70, 820, 560, hMain, NULL, GetModuleHandleW(NULL), NULL);
+    ow = owner_wnd();
+    GetWindowRect(ow, &r);
+    if (ow != hMain)
+    { /* the copilot panel can sit at a screen edge: centre on its monitor */
+        MONITORINFO mi = {sizeof mi};
+        GetMonitorInfoW(MonitorFromWindow(ow, MONITOR_DEFAULTTONEAREST), &mi);
+        r.left = (mi.rcWork.left + mi.rcWork.right - 820) / 2 - 80;
+        r.top = (mi.rcWork.top + mi.rcWork.bottom - 560) / 2 - 70;
+    }
+    h = CreateWindowExW(WS_EX_DLGMODALFRAME | (ow != hMain ? WS_EX_TOPMOST : 0), L"LCAskTxt", title, WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME,
+                        r.left + 80, r.top + 70, 820, 560, ow, NULL, GetModuleHandleW(NULL), NULL);
     for (const char *p = init; *p; p++)
     {
         if (*p == '\r')
@@ -825,7 +833,7 @@ static char *ask_text(const wchar_t *title, const wchar_t *okLabel, const char *
     apply_frame(h);
     g_atx_done = g_atx_ok = 0;
     g_atx_out = NULL;
-    EnableWindow(hMain, FALSE);
+    EnableWindow(ow, FALSE);
     ShowWindow(h, SW_SHOW);
     SetFocus(e);
     SendMessageW(e, EM_SETSEL, (WPARAM)-1, (LPARAM)-1);
@@ -840,9 +848,9 @@ static char *ask_text(const wchar_t *title, const wchar_t *okLabel, const char *
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
     }
-    EnableWindow(hMain, TRUE);
+    EnableWindow(ow, TRUE);
     DestroyWindow(h);
-    SetForegroundWindow(hMain);
+    SetForegroundWindow(ow);
     if (!g_atx_ok)
         return NULL;
     {

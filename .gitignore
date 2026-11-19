@@ -11,3 +11,4 @@ backup
 *.manifest
 MEMORY.md
 data/chats.json
+*.res

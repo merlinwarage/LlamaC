@@ -256,7 +256,7 @@ static int ask_approval(const Tool *t, const char *args, int *always)
         int pressed = 0;
         memset(&tc, 0, sizeof tc);
         tc.cbSize = sizeof tc;
-        tc.hwndParent = hMain;
+        tc.hwndParent = owner_wnd();
         tc.dwFlags = TDF_USE_COMMAND_LINKS | TDF_ALLOW_DIALOG_CANCELLATION | TDF_POSITION_RELATIVE_TO_WINDOW;
         tc.pszWindowTitle = L"llamac - tool call";
         tc.pszMainInstruction = L"The model wants to run a tool";
@@ -278,7 +278,7 @@ static int ask_approval(const Tool *t, const char *args, int *always)
         }
     }
     if (!done)
-        allow = (MessageBoxW(hMain, wc, L"llamac - allow this tool call?", MB_YESNO | MB_ICONQUESTION | MB_TOPMOST) == IDYES);
+        allow = (MessageBoxW(owner_wnd(), wc, L"llamac - allow this tool call?", MB_YESNO | MB_ICONQUESTION | MB_TOPMOST) == IDYES);
     free(wc);
     return allow;
 }

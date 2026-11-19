@@ -89,10 +89,16 @@ enum
     IDC_MCPBTN,
     IDC_TOOLSBTN,
     IDC_TOOLSDLG,
-    IDC_THINKBTN /* 148 */
+    IDC_THINKBTN, /* 148 */
+    IDC_CP_COPY,  /* copilot panel header: copy the last reply, new chat, open the main window, hide */
+    IDC_CP_NEW,
+    IDC_CP_OPEN,
+    IDC_CP_HIDE
 };
 #define WM_APP_MSG (WM_APP + 1)
 #define WM_APP_INIT (WM_APP + 2)
+/* WM_APP + 3 = WM_APP_ASK (tools_extra.h) */
+#define WM_APP_TRAY (WM_APP + 4) /* tray icon callback (copilot mode) */
 
 typedef struct
 {
@@ -140,6 +146,12 @@ static int g_vision; /* the model accepts images (/props modalities) */
 static int g_nslots; /* server slots (/props total_slots), 0 = unknown */
 static int g_last_prompt_n, g_last_pred_n;
 static int g_compacting;
+#define DOCK_H 48           /* composer row: buttons, input (1 line) and Send are this tall */
+static int g_boxH = DOCK_H; /* input box height: grows with the text, up to 6 lines */
+static int g_lineH = 20;
+static HWND hPanel; /* copilot panel (copilot.h); NULL until first shown */
+static HICON g_icon, g_icon_sm; /* app icon (resource 1, res/llamac.rc), big and small */
+static int g_cp_on; /* the composer and the chat view are hosted by the copilot panel, not the main window */
 #define PT 10
 
 #endif /* LLAMAC_WIN_BASE_H */

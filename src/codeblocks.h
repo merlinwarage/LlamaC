@@ -186,7 +186,7 @@ static void token_menu(int node, int tok)
     if (!k)
         AppendMenuW(m, MF_STRING | MF_GRAYED, 0, L"(no alternatives recorded)");
     GetCursorPos(&pt);
-    cmd = (int)TrackPopupMenu(m, TPM_RETURNCMD | TPM_RIGHTBUTTON, pt.x, pt.y, 0, hMain, NULL);
+    cmd = (int)TrackPopupMenu(m, TPM_RETURNCMD | TPM_RIGHTBUTTON, pt.x, pt.y, 0, owner_wnd(), NULL);
     DestroyMenu(m);
     if (cmd >= 1000 && cmd < 1000 + k)
         act_branch_token(node, tok, alts[cmd - 1000]);
@@ -408,7 +408,7 @@ static void blk_save(int b)
     OPENFILENAMEW o;
     memset(&o, 0, sizeof o);
     o.lStructSize = sizeof o;
-    o.hwndOwner = hMain;
+    o.hwndOwner = owner_wnd();
     o.lpstrFile = f;
     o.nMaxFile = MAX_PATH;
     o.lpstrFilter = L"All files\0*.*\0";

@@ -316,7 +316,7 @@ static void tools_btn_update(void)
 {
     int on = 0, ticked = 0, n = 0;
     wchar_t t[32];
-    HWND b = GetDlgItem(hMain, IDC_TOOLSBTN);
+    HWND b = B(IDC_TOOLSBTN);
     if (!b)
         return;
     tl_enter();
@@ -346,7 +346,7 @@ static void tools_btn_update(void)
 /* the Tools button in the input box */
 static void act_tools(void)
 {
-    if (tools_dialog(hMain, G.tooloff, sizeof G.tooloff, G.toolset, G.tools_on))
+    if (tools_dialog(owner_wnd(), G.tooloff, sizeof G.tooloff, G.toolset, G.tools_on))
     {
         cfg_save();
         tools_btn_update();

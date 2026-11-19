@@ -31,6 +31,9 @@ typedef struct
     int shot;                                /* 1 = offer the screenshot tool (asks every time) */
     char tooloff[1024];                      /* built-in tools switched off in the Tools dialog: "|name|name|" */
     int nothink;                             /* 1 = thinking switched off in the input box: chat_template_kwargs enable_thinking false */
+    int copilot;                             /* 1 = copilot mode: tray icon, global hotkey, floating panel */
+    char cphk[48];                           /* copilot hotkey, e.g. "Ctrl+Shift+Space" */
+    int cpx, cpy, cpw, cpup;                 /* copilot panel: left, anchored edge y, width (0 = not placed yet), 1 = grows upwards */
 } Cfg;
 /* kind: 0 text, 1 number override (string, empty = server default), 2 integer, 3 checkbox */
 typedef struct
@@ -91,6 +94,12 @@ static const Field FIELDS[] = {
     FLD("shot", "Allow screenshot tool (asks every time)", 3, shot, NULL, NULL),
     FLD("tooloff", NULL, 0, tooloff, NULL, NULL), /* no settings control: the Tools dialog */
     FLD("nothink", NULL, 2, nothink, NULL, NULL), /* no settings control: the Think button in the input box */
+    FLD("copilot", "Copilot mode (tray icon + floating panel)", 3, copilot, NULL, NULL),
+    FLD("cphk", "Copilot hotkey", 0, cphk, NULL, NULL),
+    FLD("cpx", NULL, 2, cpx, NULL, NULL), /* no settings control: where the panel was left */
+    FLD("cpy", NULL, 2, cpy, NULL, NULL),
+    FLD("cpw", NULL, 2, cpw, NULL, NULL),
+    FLD("cpup", NULL, 2, cpup, NULL, NULL),
 };
 #define NFIELDS ((int)(sizeof FIELDS / sizeof FIELDS[0]))
 static int fidx(const char *key)
@@ -119,6 +128,7 @@ static void cfg_defaults(Cfg *g)
     g->budget = 1;
     g->sumbud = 1024;
     g->kvmax = 10;
+    strcpy(g->cphk, "Ctrl+Shift+Space");
 }
 /* default_generation_settings.params from GET /props -> out[NFIELDS] ("" = unknown) */
 static void srv_parse(J *props, char out[][32])

@@ -196,7 +196,7 @@ static void ask_user_ui(AskReq *r)
         TASKDIALOGCONFIG tc;
         memset(&tc, 0, sizeof tc);
         tc.cbSize = sizeof tc;
-        tc.hwndParent = hMain;
+        tc.hwndParent = owner_wnd();
         tc.dwFlags = TDF_USE_COMMAND_LINKS | TDF_ALLOW_DIALOG_CANCELLATION | TDF_POSITION_RELATIVE_TO_WINDOW;
         tc.pszWindowTitle = L"llamac - the model asks";
         tc.pszMainInstruction = L"The model has a question";

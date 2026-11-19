@@ -558,7 +558,7 @@ static void mcp_btn_update(void)
 {
     int on = 0, n = g_mcp_reload ? 0 : g_nsrv;
     wchar_t t[32];
-    HWND b = GetDlgItem(hMain, IDC_MCPBTN);
+    HWND b = B(IDC_MCPBTN);
     if (!b)
         return;
     for (int i = 0; i < n; i++)
@@ -585,7 +585,7 @@ static void mcp_edit_config(HWND owner);
 /* the menu: every server of mcp.json with a check mark; it reopens after each click so several can be switched */
 static void mcp_menu(void)
 {
-    HWND b = GetDlgItem(hMain, IDC_MCPBTN);
+    HWND b = B(IDC_MCPBTN);
     RECT br;
     for (;;)
     {
@@ -663,7 +663,7 @@ static void mcp_menu(void)
         AppendMenuW(m, MF_STRING | (g_booting ? MF_GRAYED : 0), 1901, L"Reload all servers");
         AppendMenuW(m, MF_STRING, 1902, L"Edit mcp.json ...");
         GetWindowRect(b, &br);
-        cmd = (int)TrackPopupMenu(m, TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_BOTTOMALIGN, br.left, br.top - 2, 0, hMain, NULL);
+        cmd = (int)TrackPopupMenu(m, TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_BOTTOMALIGN, br.left, br.top - 2, 0, owner_wnd(), NULL);
         DestroyMenu(m);
         if (cmd == 1901)
         {

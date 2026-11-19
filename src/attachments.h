@@ -6,7 +6,7 @@
 /* the attach button shows how many attachments are waiting */
 static void attach_badge_refresh(void)
 {
-    HWND b = GetDlgItem(hMain, IDC_ATTACH);
+    HWND b = B(IDC_ATTACH);
     if (b)
         InvalidateRect(b, NULL, FALSE);
 }

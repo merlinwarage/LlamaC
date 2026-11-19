@@ -26,7 +26,16 @@ static char *get_text(HWND h)
     free(w);
     return u;
 }
-static HWND B(int id) { return GetDlgItem(hMain, id); }
+/* a main-window control by id; the composer controls live in the copilot panel while it hosts them */
+static HWND B(int id)
+{
+    HWND w = GetDlgItem(hMain, id);
+    if (!w && hPanel)
+        w = GetDlgItem(hPanel, id);
+    return w;
+}
+/* owner for dialogs and menus opened from the composer or the chat view: the copilot panel while it shows them */
+static HWND owner_wnd(void) { return (g_cp_on && hPanel && IsWindowVisible(hPanel)) ? hPanel : hMain; }
 static void set_status(const char *s)
 {
     wchar_t *w = w_from(s);

@@ -366,6 +366,8 @@ static const SItem SLAY_R[] = {
     {"fade", NULL, "Streamed text fades in instead of appearing at once.", 0},
     {"smartpaste", NULL, "Pasting more than 2000 characters into the input adds them as an attachment (pasted-text.txt) instead of filling the box.", 0},
     {"logprobs", NULL, "Shades words the model was unsure about; click one to see what else it considered and continue the answer from another choice. llama-server allows this only in requests without tools: set Tool set to None (e.g. in a profile).", 0},
+    {"copilot", NULL, "LlamaC lives in the tray. The hotkey (or a click on the tray icon) shows a small floating panel with the input box; it shows only the latest exchange and grows with the answer. Open app in the panel or the tray menu brings back this window. Closing this window keeps LlamaC in the tray; Exit is in the tray menu.", 0},
+    {"cphk", "Hotkey", "Shows / hides the copilot panel from anywhere, e.g. Ctrl+Shift+Space, Win+Alt+L or F9. Modifiers: Ctrl, Alt, Shift, Win; keys: A-Z, 0-9, F1-F24, Space, Insert, Home, End, PageUp, PageDown, Pause. Avoid Ctrl+Alt combinations on keyboards with AltGr.", 0},
     {NULL, NULL, NULL, 0}};
 static const SItem *const SLAYOUT[2] = {SLAY_L, SLAY_R};
 static HWND setHdr[12];
@@ -393,6 +395,7 @@ static void tip_add(HWND tt, HWND ctl, const char *tip)
     free(w); /* the tooltip keeps its own copy */
 }
 
+static void cp_apply(void); /* copilot.h */
 static LRESULT CALLBACK SetProc(HWND h, UINT m, WPARAM w, LPARAM l)
 {
     switch (m)
@@ -525,6 +528,7 @@ static LRESULT CALLBACK SetProc(HWND h, UINT m, WPARAM w, LPARAM l)
             snprintf(G.tooloff, sizeof G.tooloff, "%s", s_tooloff);
             cfg_save();
             tools_apply_settings();
+            cp_apply(); /* copilot mode: tray icon and hotkey on / off */
             layout(); /* the MCP and Tools buttons in the input box come and go with "Enable tools" */
             mcp_btn_update();
             tools_btn_update();

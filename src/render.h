@@ -709,6 +709,7 @@ typedef struct
 } RdNode;
 static RdNode *g_rd;
 static int g_rdn, g_rdcap, g_rd_key = -1;
+static int g_rd_base; /* first path index shown: 0, or in the copilot panel the latest user message */
 static void blocks_trunc(int nb, int nl, int nt)
 {
     for (int i = nb; i < nblk; i++)
@@ -785,8 +786,8 @@ static void render_node(const int *p, int i, int n)
 }
 static void render_all(void)
 {
-    int *p = NULL, n = 0, start = 0;
-    int key = (G.dark ? 1 : 0) | (G.thoughts ? 2 : 0) | (g_colw << 2);
+    int *p = NULL, n = 0, start = 0, base = 0;
+    int key = (G.dark ? 1 : 0) | (G.thoughts ? 2 : 0) | (g_cp_on ? 4 : 0) | (g_colw << 3);
     ScrollKeep k;
     g_pend.n = 0;
     if (g_pend.p)
@@ -795,7 +796,14 @@ static void render_all(void)
     g_lt.on = 0;  /* the live thinking block is part of the last message: removed with it, rebuilt by render_node */
     if (cur)
         n = conv_path(cur, &p);
-    if (cur && cur == g_rd_conv && key == g_rd_key && n > 0 && g_rdn > 0)
+    if (g_cp_on) /* the copilot panel shows only the latest exchange: the last user message and what followed it */
+        for (int i = n - 1; i >= 0; i--)
+            if (cur->n[p[i]].role == ROLE_USER)
+            {
+                base = i;
+                break;
+            }
+    if (cur && cur == g_rd_conv && key == g_rd_key && base == g_rd_base && n > 0 && g_rdn > 0)
     {
         int d = 0;
         while (d < n && d < g_rdn && g_rd[d].id == p[d])
@@ -807,6 +815,8 @@ static void render_all(void)
             start = g_rdn - 1;
         if (start < 0)
             start = 0;
+        if (start < base)
+            start = 0; /* a change before the shown exchange: rebuild */
     }
     keep_begin(&k);
     SendMessageW(hChat, WM_SETREDRAW, FALSE, 0);
@@ -824,7 +834,7 @@ static void render_all(void)
             pf.dyLineSpacing = 24;
             SendMessageW(hChat, EM_SETPARAFORMAT, 0, (LPARAM)&pf);
         }
-        if (cur && n == 0)
+        if (cur && n == 0 && !g_cp_on)
         {
             int sv = re_pt;
             re_pt = 20;
@@ -856,11 +866,13 @@ static void render_all(void)
         g_rd[i].nb = nblk;
         g_rd[i].nl = nlinks;
         g_rd[i].nt = nthink;
-        render_node(p, i, n);
+        if (i >= base) /* the nodes before base keep offset 0: nothing of them is shown */
+            render_node(p, i, n);
         g_rdn = i + 1;
     }
     g_rd_conv = cur;
     g_rd_key = key;
+    g_rd_base = base;
     free(p);
     SendMessageW(hChat, WM_SETREDRAW, TRUE, 0);
     if (start == 0)

@@ -53,4 +53,5 @@
 #include "src/tools_extra.h" /* system_info, update_plan, ask_user, screenshot */
 #include "src/tools_dlg.h"   /* Built-in tools dialog */
 #include "src/settings_ui.h" /* after the tool modules */
+#include "src/copilot.h"     /* tray, hotkey, floating panel */
 #include "src/main_window.h"
