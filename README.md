@@ -2,7 +2,7 @@
 
 **A lightweight, native Windows client for [`llama-server`](https://github.com/ggml-org/llama.cpp), written in pure C.**
 
-LlamaC is a single, portable `.exe` with no runtime, Electron, or browser dependency. It aims to provide an experience similar to the llama.cpp WebUI while using **about 4 MB of memory**.
+LlamaC is a single, portable `.exe` with no runtime, Electron, or browser dependency. It aims to provide a full LLM chat experience while using **about 4 MB of memory**.
 
 ![Language: C](https://img.shields.io/badge/language-C-blue)
 ![Platform: Windows 10/11](https://img.shields.io/badge/platform-Windows%2010%2F11-0078D6)
