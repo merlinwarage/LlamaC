@@ -7,7 +7,7 @@ LlamaC is a single, portable `.exe` with no runtime, Electron, or browser depend
 ![Language: C](https://img.shields.io/badge/language-C-blue)
 ![Platform: Windows 10/11](https://img.shields.io/badge/platform-Windows%2010%2F11-0078D6)
 ![Dependencies: none](https://img.shields.io/badge/dependencies-none-brightgreen)
-![Version: 3.0.0](https://img.shields.io/badge/version-3.0.0-lightgrey)
+![Version: 3.5.0](https://img.shields.io/badge/version-3.5.0-lightgrey)
 
 <p align="center">
   <img src="docs/main.png" alt="LlamaC chat window" width="49%">
@@ -25,6 +25,7 @@ LlamaC is a single, portable `.exe` with no runtime, Electron, or browser depend
         - [Configuration and portability](#configuration-and-portability)
     - [Quick start](#quick-start)
     - [Settings](#settings)
+    - [Copilot mode](#copilot-mode)
     - [Tools: file access and MCP](#tools-file-access-and-mcp)
         - [Date and time](#date-and-time)
         - [File tools](#file-tools)
@@ -54,7 +55,8 @@ LlamaC is a single, portable `.exe` with no runtime, Electron, or browser depend
 - **Branching conversations.** Regenerate or edit a message and flip between alternatives (`‹ 1 / 2 ›`).
 - **Edit a reply and continue.** Correct the model's answer and let it go on from your text, as a new branch. This also continues a reply that hit the token limit.
 - **Message queue.** Press Enter while the model is working, and the message is sent when the reply is complete.
-- **Reasoning support.** Collapsible "Thinking" blocks for `reasoning_content` and inline `<think>` tags.
+- **Reasoning support.** Collapsible "Thinking" blocks for `reasoning_content` and inline `<think>` tags. Tool results are collapsible blocks too; turning off **Show reasoning blocks** hides both.
+- **Copilot mode.** LlamaC can live in the tray: a global hotkey opens a small floating panel with the input box that shows the latest exchange. See [Copilot mode](#copilot-mode).
 - **Token confidence.** Words the model was unsure about are shaded. Click one to see the alternatives and continue from another choice.
 - **Search** across chat titles and contents.
 - **WebUI-compatible import/export** of chats as JSON.
@@ -73,7 +75,7 @@ LlamaC is a single, portable `.exe` with no runtime, Electron, or browser depend
 
 - **Rich rendering** in a native RichEdit control: Markdown (headings, lists, quotes, tables, inline code), syntax-highlighted code blocks with **Copy** and **Download** buttons. Long code lines wrap inside the block.
 - **Clickable links.** `[text](url)` links and bare `http(s)://` URLs open in your default browser. Only `http`, `https` and `mailto` links are opened.
-- **Attachments.** Images, audio (`.mp3`, `.wav`), text files and **PDF / DOCX / XLSX** (attached as their text), via the button, drag and drop onto the window, the input box or the chat view, a long paste that becomes an attachment, or **Ctrl+V of a screenshot or of files copied in Explorer**.
+- **Attachments.** Images, audio (`.mp3`, `.wav`), text files and **PDF / DOCX / XLSX** (attached as their text), via the button, drag and drop onto the window, the input box or the chat view, a long paste that becomes an attachment, or **Ctrl+V of a screenshot or of files copied in Explorer**. While attachments are waiting, the **+** button lists them, so you can remove one or all before sending.
 - **Documents.** PDF, DOCX and XLSX are read as text, by the file tools and as attachments, with no other software installed.
 
 ### Configuration and portability
@@ -101,6 +103,16 @@ Settings are grouped into sections: **Connection**, **Chat template & profiles**
 Sampling fields left empty are not sent, so llama-server's own values apply. The grey hint in each box shows the server value. **Reset sampling** clears all sampling overrides.
 
 The **System prompt** can hold up to 4095 bytes (accented characters take 2 bytes). **Save** and **Delete** next to the name box keep named **profiles** in `data\prompts.json`. A profile stores the prompt together with the reminder, tool set, the built-in tools switched off, temperature, top-k, top-p, min-p, think budget and template kwargs. To change the prompt limit, edit the size of `sys` in `src/config.h` and rebuild. Model names of any length are supported.
+
+## Copilot mode
+
+Turn on **Copilot mode** under **Settings > Display** to keep LlamaC in the tray and ask it something from any program.
+
+- The **hotkey** (default `Ctrl+Shift+Space`, set it under **Settings > Display**) or a click on the tray icon shows a small floating panel with the full input box: attachments, Think, Tools, MCP, Send/Stop and the message queue work as in the main window.
+- The panel shows only the latest exchange and grows with the answer. **New** clears it, **Copy** copies the last reply, **Open app** brings back the main window with the whole conversation, **Hide** (or `Esc`) hides it.
+- Drag the panel by its header and resize its width at the left or right edge. In the lower half of the screen it grows upwards, in the upper half downwards. Its position is remembered.
+- Closing or minimizing the main window keeps LlamaC in the tray. To quit, use **Exit** in the tray icon's menu (right-click).
+- Hotkey format: modifiers `Ctrl`, `Alt`, `Shift`, `Win` plus a key (`A`-`Z`, `0`-`9`, `F1`-`F24`, `Space`, `Insert`, `Home`, `End`, `PageUp`, `PageDown`, `Pause`), for example `Win+Alt+L` or `F9`. If another program already uses it, the status line says so. Avoid `Ctrl+Alt` combinations on keyboards with AltGr.
 
 ## Tools: file access and MCP
 
@@ -282,11 +294,14 @@ Requirements: Visual Studio 2022 (MSVC) on x64 Windows; the VS 2019 Build Tools 
 
 Open **x64 Native Tools Command Prompt for VS 2022** (or the 2019 Build Tools' x64 prompt) and run `build.bat`.
 
-Link libraries are pulled in through `#pragma comment`. `build.bat` also embeds the application manifest (`/MANIFEST:EMBED`), which enables Common Controls v6. Without it, tooltips, grey hint text and themed controls do not appear. If you build by hand, keep those flags:
+Link libraries are pulled in through `#pragma comment`. `build.bat` compiles the app icon (`res\llamac.rc`) with `rc.exe` and embeds the application manifest (`/MANIFEST:EMBED`), which enables Common Controls v6. Without the manifest, tooltips, grey hint text and themed controls do not appear. If you build by hand, keep those steps:
 
 ```bat
-cl /O2 /W3 /utf-8 llamac.c /link /MANIFEST:EMBED "/MANIFESTUAC:level='asInvoker' uiAccess='false'"
+rc /fo res\llamac.res res\llamac.rc
+cl /O2 /W3 /utf-8 llamac.c res\llamac.res /link /MANIFEST:EMBED "/MANIFESTUAC:level='asInvoker' uiAccess='false'"
 ```
+
+The icon is drawn by `res\make_icon.py` (Python standard library only). Change its colours or shapes and run `python res\make_icon.py` to write a new `res\llamac.ico`; `--preview <folder>` also writes PNG previews.
 
 The version string is `LLAMAC_VERSION` at the top of `llamac.c`.
 
@@ -313,6 +328,8 @@ Then rebuild.
 | `Enter` while the model works | Queue the message (Stop puts it back in the box)                       |
 | `Ctrl+V`                      | Paste text, a screenshot (attached as PNG) or files copied in Explorer |
 | `Shift+F10`                   | Menu for the selected chat in the list (right-click works too)         |
+| `Ctrl+Shift+Space` (default)  | Copilot mode: show / hide the floating panel (set under Settings)      |
+| `Esc` in the copilot panel    | Hide the panel                                                         |
 
 ## Project layout
 
@@ -321,6 +338,10 @@ The project is a unity build: `llamac.c` includes the modules in `src/` in depen
 ```text
 llamac.c            entry point, includes all modules
 build.bat
+res/
+  llamac.ico        app icon (written by make_icon.py)
+  llamac.rc         resource script that embeds the icon
+  make_icon.py      draws the icon (Python standard library only)
 src/
   util.h            string builder, allocation helpers
   json.h            tiny JSON DOM parser
@@ -340,10 +361,10 @@ src/
   highlight.h       syntax highlighter
   codeblocks.h      code blocks, Copy/Download links
   markdown.h        Markdown renderer
-  render.h          thinking blocks, streaming, render_all
+  render.h          thinking and tool-result blocks, streaming, render_all
   storage.h         data directory, persistence
   conv_list.h       sidebar list and search
-  attachments.h     attachment loading
+  attachments.h     attachment loading, the + button's attachment menu
   http.h            WinHTTP helpers
   worker.h          streaming worker thread
   text_window.h     read-only text window
@@ -357,6 +378,7 @@ src/
   tools_extra.h     system_info, update_plan, ask_user, screenshot
   tools_dlg.h       Built-in tools dialog
   settings_ui.h     settings dialog and profiles
+  copilot.h         copilot mode: tray icon, global hotkey, floating panel
   main_window.h     window procedure, layout, context gauge, WinMain
   compact.h         chat compression (tool-result stubs, streaming summary)
   ctxview.h         "What is in the context" window
