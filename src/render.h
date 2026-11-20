@@ -7,14 +7,15 @@ static COLORREF blend(COLORREF a, COLORREF b, int pct)
     return RGB(GetRValue(a) + (GetRValue(b) - GetRValue(a)) * pct / 100, GetGValue(a) + (GetGValue(b) - GetGValue(a)) * pct / 100,
                GetBValue(a) + (GetBValue(b) - GetBValue(a)) * pct / 100);
 }
-/* ---------- collapsible thinking block ---------- */
-static void render_think(const char *txt, size_t n)
+/* ---------- collapsible blocks: thinking, tool results ----------
+   "> label" header (a click toggles it, think_toggle in codeblocks.h; the open state is the node's think_open), then
+   the body, hidden while collapsed. code: body in the code font (tool output); note: an extra italic line in the body. */
+static void render_fold(const char *label, const char *txt, size_t n, int code, const char *note)
 {
-    if (!n)
-        return;
     int open = (g_rnode >= 0 && cur && g_rnode < cur->cnt && cur->n[g_rnode].think_open);
-    char hdr[80];
-    snprintf(hdr, sizeof hdr, "%s Thinking (%u chars)", open ? "\xE2\x96\xBE" : "\xE2\x96\xB8", (unsigned)n);
+    char hdr[240];
+    LONG a;
+    snprintf(hdr, sizeof hdr, "%s %s", open ? "\xE2\x96\xBE" : "\xE2\x96\xB8", label);
     if (nthink == capthink)
     {
         capthink = capthink ? capthink * 2 : 8;
@@ -31,14 +32,28 @@ static void render_think(const char *txt, size_t n)
     link_new(re_s, re_e, id, 2);
     re_nl();
     re_track = 1;
-    re_add(txt, n, cDim, CFE_ITALIC, FACE);
+    if (code)
+        re_code(txt, n, cDim, 0);
+    else
+        re_add(txt, n, cDim, CFE_ITALIC, FACE);
+    a = re_s;
+    if (note)
+        re_add(note, strlen(note), cDim, CFE_ITALIC, FACE);
     re_track = 0;
-    t->a = re_s;
+    t->a = a;
     t->b = re_e;
     re_nl();
     if (t->collapsed)
         set_hidden(t->a, t->b + 1, 1);
     re_nl();
+}
+static void render_think(const char *txt, size_t n)
+{
+    char label[64];
+    if (!n)
+        return;
+    snprintf(label, sizeof label, "Thinking (%u chars)", (unsigned)n);
+    render_fold(label, txt, n, 0, NULL);
 }
 
 /* ---------- streaming: coalesce tokens, flush on a timer ---------- */
@@ -623,27 +638,27 @@ static void shade_tokens(int node, LONG a, LONG b)
 static const char *role_label(int r) { return r == ROLE_USER ? "You" : r == ROLE_ASSIST ? "Assistant"
                                                                    : r == ROLE_TOOL     ? "Tool"
                                                                                         : "System"; }
+/* a tool result: a collapsible block like thinking (render_node skips tool nodes while reasoning blocks are hidden) */
 static void render_tool_result(Node *m)
 {
-    char h[200];
+    char h[240];
     size_t full = strlen(m->content), n = full;
-    snprintf(h, sizeof h, "\xE2\x96\xB8 %.150s%s\n", m->tname && *m->tname ? m->tname : "tool",
-             m->elided ? "   (shortened in requests to save context)" : "");
-    re_add(h, strlen(h), cDim, CFE_BOLD, FACE);
+    const char *nm = m->tname && *m->tname ? m->tname : "tool";
+    if (!full)
+    {
+        snprintf(h, sizeof h, "\xE2\x96\xB8 %.150s result (empty)\n", nm);
+        re_add(h, strlen(h), cDim, CFE_BOLD, FACE);
+        re_nl();
+        return;
+    }
+    snprintf(h, sizeof h, "%.150s result (%u chars)%s", nm, (unsigned)full, m->elided ? "   - shortened in requests to save context" : "");
     if (n > 4000)
     {
         n = 4000;
         while (n && ((unsigned char)m->content[n] & 0xC0) == 0x80)
             n--;
     }
-    if (n)
-        re_code(m->content, n, cDim, 0);
-    if (n < full)
-    {
-        const char *t = "\n... (shortened in this view; the model received the full result)";
-        re_add(t, strlen(t), cDim, CFE_ITALIC, FACE);
-    }
-    re_nl();
+    render_fold(h, m->content, n, 1, n < full ? "\n... (shortened in this view; the model received the full result)" : NULL);
 }
 static void render_tool_calls(const char *json)
 {
@@ -723,10 +738,22 @@ static void blocks_trunc(int nb, int nl, int nt)
     if (nt < nthink)
         nthink = nt;
 }
-static void render_node(const int *p, int i, int n)
+/* tool results are reasoning-like detail: hidden together with the thinking blocks (Show reasoning blocks off) */
+static int rd_shown(int node) { return !(cur->n[node].role == ROLE_TOOL && !G.thoughts); }
+/* base: first path index shown (render_all). The separator line goes BEFORE a message when a shown one precedes it,
+   so a message depends only on what is above it - hidden tool results in between need no re-render of earlier ones */
+static void render_node(const int *p, int i, int n, int base)
 {
     Node *m = &cur->n[p[i]];
     char hdr[96];
+    if (!rd_shown(p[i]))
+        return;
+    for (int k = i - 1; k >= base; k--)
+        if (rd_shown(p[k]))
+        {
+            re_rule(cBorder);
+            break;
+        }
     Node *pn = &cur->n[m->parent];
     int pos = 0;
     for (int k = 0; k < pn->nk; k++)
@@ -778,11 +805,7 @@ static void render_node(const int *p, int i, int n)
             render_tool_calls(m->tcalls);
     }
     if (!(busy && cur == genConv && p[i] == genNode))
-    {
         re_nl();
-        if (i + 1 < n)
-            re_rule(cBorder);
-    }
 }
 static void render_all(void)
 {
@@ -867,7 +890,7 @@ static void render_all(void)
         g_rd[i].nl = nlinks;
         g_rd[i].nt = nthink;
         if (i >= base) /* the nodes before base keep offset 0: nothing of them is shown */
-            render_node(p, i, n);
+            render_node(p, i, n, base);
         g_rdn = i + 1;
     }
     g_rd_conv = cur;

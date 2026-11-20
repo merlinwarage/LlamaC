@@ -184,7 +184,8 @@ static void cp_default_place(void)
     G.cpup = 1;
     G.cpy = wk.bottom - (wk.bottom - wk.top) / 6;
 }
-static void cp_place(void)
+/* returns 1 when the size changed: WM_SIZE has then already run cp_layout */
+static int cp_place(void)
 {
     RECT wk, now;
     POINT pt;
@@ -216,7 +217,8 @@ static void cp_place(void)
         x = wk.left;
     GetWindowRect(hPanel, &now);
     if (now.left != x || now.top != top || now.right - now.left != W || now.bottom - now.top != H)
-        SetWindowPos(hPanel, NULL, x, top, W, H, SWP_NOZORDER | SWP_NOACTIVATE);
+        SetWindowPos(hPanel, NULL, x, top, W, H, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS); /* no stale pixels: cp_layout repaints */
+    return now.right - now.left != W || now.bottom - now.top != H;
 }
 static int cp_btn_w(HWND b)
 {
@@ -248,17 +250,17 @@ static void cp_layout(void)
             HWND b = GetDlgItem(hPanel, ids[i]);
             int bw = cp_btn_w(b);
             x -= bw;
-            MoveWindow(b, x, 7, bw, CP_HDR - 14, TRUE);
+            MoveWindow(b, x, 7, bw, CP_HDR - 14, FALSE);
             x -= 2;
         }
-        MoveWindow(hStatus, 82, (CP_HDR - 18) / 2, x - 8 - 82 > 0 ? x - 8 - 82 : 0, 18, TRUE);
+        MoveWindow(hStatus, 82, (CP_HDR - 18) / 2, x - 8 - 82 > 0 ? x - 8 - 82 : 0, 18, FALSE);
     }
     g_colw = W - 2 - 28; /* the same whether collapsed or not: expanding must not force a full re-render */
     if (g_cp_chatH)
     {
         int chatTop = G.cpup ? CP_HDR : CP_HDR + g_boxH + CP_GAP;
         yBox = G.cpup ? CP_HDR + g_cp_chatH + CP_GAP : CP_HDR;
-        MoveWindow(hChat, 1, chatTop, W - 2, g_cp_chatH, TRUE);
+        MoveWindow(hChat, 1, chatTop, W - 2, g_cp_chatH, FALSE);
     }
     else
     { /* collapsed: parked below the client area (clipped). ShowWindow(SW_HIDE) would not last: render_all's
@@ -272,19 +274,21 @@ static void cp_layout(void)
         const int gids[] = {IDC_ATTACH, IDC_THINKBTN, IDC_TOOLSBTN, IDC_MCPBTN};
         SetRect(&cp_rcTools, left, yRow, left + gw, yRow + DOCK_H);
         for (int i = 0; i < nb; i++)
-            MoveWindow(B(gids[i]), left + 3 + i * 42, yRow + 4, 38, DOCK_H - 8, TRUE);
+            MoveWindow(B(gids[i]), left + 3 + i * 42, yRow + 4, 38, DOCK_H - 8, FALSE);
         SetRect(&cp_rcBox, left + gw + 8, yBox, left + cw - DOCK_H - 8, yBox + g_boxH);
-        MoveWindow(hInput, cp_rcBox.left + 14, yBox + 13, cp_rcBox.right - cp_rcBox.left - 28, g_boxH - 24, TRUE);
-        MoveWindow(B(IDC_SEND), left + cw - DOCK_H, yRow, DOCK_H, DOCK_H, TRUE);
+        MoveWindow(hInput, cp_rcBox.left + 14, yBox + 13, cp_rcBox.right - cp_rcBox.left - 28, g_boxH - 24, FALSE);
+        MoveWindow(B(IDC_SEND), left + cw - DOCK_H, yRow, DOCK_H, DOCK_H, FALSE);
     }
-    InvalidateRect(hPanel, NULL, TRUE);
+    /* the children were moved without repainting (siblings overlap while they move): repaint everything once, like
+       layout() in the main window - otherwise stale pieces of moved buttons stay on screen */
+    RedrawWindow(hPanel, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW);
 }
 static void cp_relayout(void)
 {
     if (!hPanel || !g_cp_on)
         return;
-    cp_place();
-    cp_layout();
+    if (!cp_place())
+        cp_layout(); /* same size (e.g. the Tools / MCP buttons came or went): lay out here, once */
 }
 
 /* ---------- growing with the answer ---------- */
@@ -298,7 +302,9 @@ static int cp_content_h(void)
         return 0;
     SendMessageW(hChat, EM_POSFROMCHAR, (WPARAM)&pt, n - 1);
     SendMessageW(hChat, EM_GETSCROLLPOS, 0, (LPARAM)&sp);
-    return pt.y + sp.y + g_lineH * 3 / 2; /* pt is the top of the last line (a finished message ends with a blank one) */
+    /* pt is the top of the last line (a finished message ends with a blank one). Not the scroll range: RichEdit
+       updates it lazily and it stays inflated after the live thinking block collapses */
+    return pt.y + sp.y + g_lineH * 2 + 6; /* measured: RichEdit's content ends ~40 px below the last char's top */
 }
 static int cp_last_user(const Conv *c)
 {
@@ -321,8 +327,9 @@ static void cp_fit(void)
             want = 140;
         if (want > cp_max_chat(&wk))
             want = cp_max_chat(&wk);
-        if (cur == g_cp_exconv && ex == g_cp_exnode && want < g_cp_chatH)
-            want = g_cp_chatH; /* the same exchange: no shrinking while it streams or re-renders */
+        if (busy && cur == g_cp_exconv && ex == g_cp_exnode && want < g_cp_chatH)
+            want = g_cp_chatH; /* the same exchange still generating: no jumping up and down while it streams; once
+                                  it is done the panel fits the result (a long thinking block collapses to one line) */
     }
     g_cp_exconv = cur;
     g_cp_exnode = ex;
@@ -330,6 +337,16 @@ static void cp_fit(void)
     {
         g_cp_chatH = want;
         cp_relayout();
+    }
+    if (g_cp_chatH && cp_content_h() <= g_cp_chatH)
+    { /* everything fits now: undo the scrolling done while the answer outgrew the old height (top line cut off) */
+        POINT sp = {0, 0};
+        SendMessageW(hChat, EM_GETSCROLLPOS, 0, (LPARAM)&sp);
+        if (sp.y)
+        {
+            sp.x = sp.y = 0;
+            SendMessageW(hChat, EM_SETSCROLLPOS, 0, (LPARAM)&sp);
+        }
     }
 }
 /* after the user moved or resized the panel: remember where, and which way it grows from there */
@@ -488,6 +505,7 @@ static void cp_create(void)
     wc.hInstance = hi;
     wc.hCursor = LoadCursorW(NULL, IDC_ARROW);
     wc.lpszClassName = L"LCPanel";
+    wc.style = CS_HREDRAW | CS_VREDRAW; /* any size change repaints the whole panel */
     RegisterClassExW(&wc);
     /* tool window: no taskbar button, not in Alt+Tab; topmost: it floats over the app being worked in */
     hPanel = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_TOPMOST, L"LCPanel", L"LlamaC", WS_POPUP | WS_CLIPCHILDREN, 0, 0, 680, 120, NULL, NULL, hi, NULL);
