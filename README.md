@@ -7,7 +7,7 @@ LlamaC is a single, portable `.exe` with no runtime, Electron, or browser depend
 ![Language: C](https://img.shields.io/badge/language-C-blue)
 ![Platform: Windows 10/11](https://img.shields.io/badge/platform-Windows%2010%2F11-0078D6)
 ![Dependencies: none](https://img.shields.io/badge/dependencies-none-brightgreen)
-![Version: 3.5.0](https://img.shields.io/badge/version-3.5.0-lightgrey)
+![Version: 3.7.0](https://img.shields.io/badge/version-3.7.0-lightgrey)
 
 <p align="center">
   <img src="docs/main.png" alt="LlamaC chat window" width="49%">
