@@ -30,11 +30,60 @@ static size_t md_autolink(const char *s, size_t n)
     }
     return j > p ? j : 0;
 }
+/* Capture mode: md_inline() records styled runs here instead of writing to the RichEdit, so a caller
+   (md_table) can measure, wrap and pad formatted text itself. Runs point into the source text. */
+typedef struct
+{
+    const char *s;
+    size_t n;
+    COLORREF col;
+    DWORD eff;
+    int code;
+    const char *url; /* link target, NULL if none */
+    size_t un;
+} MdRun;
+static MdRun *md_cap;
+static int md_ncap, md_acap, md_capturing;
+static void md_out(const char *s, size_t n, COLORREF col, DWORD eff, int code)
+{
+    if (!n)
+        return;
+    if (!md_capturing)
+    {
+        if (code)
+            re_code(s, n, col, eff);
+        else
+            re_add(s, n, col, eff, FACE);
+        return;
+    }
+    if (md_ncap == md_acap)
+    {
+        md_acap = md_acap ? md_acap * 2 : 64;
+        md_cap = (MdRun *)realloc(md_cap, (size_t)md_acap * sizeof *md_cap);
+    }
+    MdRun r = {s, n, col, eff, code, NULL, 0};
+    md_cap[md_ncap++] = r;
+}
+/* start of a link range: a RichEdit position, or a run index while capturing */
+static LONG md_mark(void) { return md_capturing ? (LONG)md_ncap : re_pos(); }
+static void md_link(LONG a, const char *u, size_t n)
+{
+    if (!md_capturing)
+    {
+        url_link(a, re_pos(), u, n);
+        return;
+    }
+    for (int k = (int)a; k < md_ncap; k++)
+    {
+        md_cap[k].url = u;
+        md_cap[k].un = n;
+    }
+}
 static void md_span(const char *s, size_t n, COLORREF col, DWORD eff) { md_inline(s, n, col, eff); }
 static void md_inline(const char *s, size_t n, COLORREF col, DWORD base)
 {
     size_t i = 0, st = 0;
-#define FLUSH() re_add(s + st, i - st, col, base, FACE)
+#define FLUSH() md_out(s + st, i - st, col, base, 0)
     while (i < n)
     {
         char c = s[i];
@@ -42,9 +91,9 @@ static void md_inline(const char *s, size_t n, COLORREF col, DWORD base)
         if (!md_in_link && (c == 'h' || c == 'H') && (i == 0 || !isalnum((unsigned char)s[i - 1])) && (ul = md_autolink(s + i, n - i)) > 0)
         {
             FLUSH();
-            LONG a = re_pos();
-            re_add(s + i, ul, cAccent, base | CFE_UNDERLINE, FACE);
-            url_link(a, re_pos(), s + i, ul);
+            LONG a = md_mark();
+            md_out(s + i, ul, cAccent, base | CFE_UNDERLINE, 0);
+            md_link(a, s + i, ul);
             i += ul;
             st = i;
             continue;
@@ -57,7 +106,7 @@ static void md_inline(const char *s, size_t n, COLORREF col, DWORD base)
             if (j < n && j > i + 1)
             {
                 FLUSH();
-                re_code(s + i + 1, j - i - 1, cCode, 0);
+                md_out(s + i + 1, j - i - 1, cCode, 0, 1);
                 i = j + 1;
                 st = i;
                 continue;
@@ -118,15 +167,15 @@ static void md_inline(const char *s, size_t n, COLORREF col, DWORD base)
                 if (k < n)
                 {
                     FLUSH();
-                    LONG a = re_pos();
+                    LONG a = md_mark();
                     md_in_link++;
                     md_span(s + i + 1, j - i - 1, cAccent, base | CFE_UNDERLINE);
                     md_in_link--;
-                    re_add(" (", 2, cDim, 0, FACE);
-                    re_add(s + j + 2, k - j - 2, cDim, 0, FACE);
-                    re_add(")", 1, cDim, 0, FACE);
+                    md_out(" (", 2, cDim, 0, 0);
+                    md_out(s + j + 2, k - j - 2, cDim, 0, 0);
+                    md_out(")", 1, cDim, 0, 0);
                     if (!md_in_link)
-                        url_link(a, re_pos(), s + j + 2, k - j - 2);
+                        md_link(a, s + j + 2, k - j - 2);
                     i = k + 1;
                     st = i;
                     continue;
@@ -138,13 +187,140 @@ static void md_inline(const char *s, size_t n, COLORREF col, DWORD base)
     FLUSH();
 #undef FLUSH
 }
-static size_t u8len(const char *s, size_t n)
+/* ---------- table cell layout ---------- */
+typedef struct
 {
-    size_t c = 0;
-    for (size_t i = 0; i < n; i++)
-        if (((unsigned char)s[i] & 0xC0) != 0x80)
-            c++;
-    return c;
+    int run; /* index into md_cap, -1 = a single space */
+    size_t off, len;
+    int w, line;
+} MdSeg;
+typedef struct
+{
+    MdSeg *p;
+    int n, cap;
+} MdSegs;
+static void seg_push(MdSegs *v, int run, size_t off, size_t len, int w, int line)
+{
+    MdSeg *t = v->n ? &v->p[v->n - 1] : NULL;
+    if (t && run >= 0 && t->run == run && t->line == line && t->off + t->len == off)
+    { /* contiguous text of the same run on the same line: one segment */
+        t->len += len;
+        t->w += w;
+        return;
+    }
+    if (v->n == v->cap)
+    {
+        v->cap = v->cap ? v->cap * 2 : 32;
+        v->p = (MdSeg *)realloc(v->p, (size_t)v->cap * sizeof *v->p);
+    }
+    MdSeg g = {run, off, len, w, line};
+    v->p[v->n++] = g;
+}
+/* length of a <br>, <br/> or <br /> tag at s, 0 if none */
+static size_t md_br(const char *s, size_t n)
+{
+    if (n < 4 || s[0] != '<' || _strnicmp(s + 1, "br", 2))
+        return 0;
+    size_t i = 3;
+    while (i < n && s[i] == ' ')
+        i++;
+    if (i < n && s[i] == '/')
+        i++;
+    return i < n && s[i] == '>' ? i + 1 : 0;
+}
+typedef struct
+{
+    MdSegs *out, word;
+    int w, ww, line, col, sp, maxw, maxword;
+} MdWrap;
+/* places the pending word: on this line after a space, or on the next one; a word wider than the
+   column is broken between characters */
+static void wrap_word(MdWrap *z)
+{
+    if (!z->word.n)
+        return;
+    if (z->ww > z->maxword)
+        z->maxword = z->ww;
+    if (z->col > 0 && z->w > 0 && z->col + z->sp + z->ww > z->w)
+    {
+        z->line++;
+        z->col = 0;
+    }
+    else if (z->col > 0 && z->sp)
+    {
+        seg_push(z->out, -1, 0, 1, 1, z->line);
+        z->col++;
+    }
+    for (int k = 0; k < z->word.n; k++)
+    {
+        MdSeg *g = &z->word.p[k];
+        const char *s = md_cap[g->run].s + g->off;
+        for (size_t i = 0; i < g->len;)
+        {
+            size_t l;
+            int cw = u8_cw((const unsigned char *)s + i, g->len - i, &l);
+            if (z->w > 0 && z->col > 0 && z->col + cw > z->w)
+            {
+                z->line++;
+                z->col = 0;
+            }
+            seg_push(z->out, g->run, g->off + i, l, cw, z->line);
+            z->col += cw;
+            if (z->col > z->maxw)
+                z->maxw = z->col;
+            i += l;
+        }
+    }
+    z->word.n = 0;
+    z->ww = 0;
+    z->sp = 0;
+}
+/* lays out the runs md_cap[a..b) into lines at most w columns wide (w <= 0: only <br> breaks lines);
+   returns the line count, *maxw = the widest line, *maxword = the widest word */
+static int md_wrap(int a, int b, int w, MdSegs *out, int *maxw, int *maxword)
+{
+    MdWrap z;
+    memset(&z, 0, sizeof z);
+    z.out = out;
+    z.w = w;
+    for (int r = a; r < b; r++)
+    {
+        const MdRun *u = &md_cap[r];
+        for (size_t i = 0; i < u->n;)
+        {
+            size_t bl;
+            if (u->s[i] == ' ' || u->s[i] == '\t')
+            {
+                wrap_word(&z);
+                z.sp = 1;
+                i++;
+                continue;
+            }
+            if (!u->code && (bl = md_br(u->s + i, u->n - i)) > 0)
+            {
+                wrap_word(&z);
+                z.line++;
+                z.col = 0;
+                z.sp = 0;
+                i += bl;
+                continue;
+            }
+            size_t j = i;
+            while (j < u->n && u->s[j] != ' ' && u->s[j] != '\t' && (u->code || !md_br(u->s + j, u->n - j)))
+            {
+                size_t l;
+                z.ww += u8_cw((const unsigned char *)u->s + j, u->n - j, &l);
+                j += l;
+            }
+            seg_push(&z.word, r, i, j - i, 0, 0); /* a word may continue in the next run: "**bold**," */
+            i = j;
+        }
+    }
+    wrap_word(&z);
+    free(z.word.p);
+    *maxw = z.maxw;
+    *maxword = z.maxword;
+    return z.line + 1;
 }
 typedef struct
 {
@@ -157,7 +333,6 @@ static void md_table(const char **ln, size_t *ll, int n)
     Cell(*cells)[MAXC] = (Cell(*)[MAXC])calloc((size_t)n, sizeof *cells);
     int *nc = (int *)calloc((size_t)n, sizeof(int));
     char *isep = (char *)calloc((size_t)n, 1);
-    size_t wd[MAXC] = {0};
     int ncols = 0, hdr_sep = -1;
     for (int r = 0; r < n; r++)
     {
@@ -201,51 +376,132 @@ static void md_table(const char **ln, size_t *ll, int n)
             hdr_sep = r;
         if (nc[r] > ncols)
             ncols = nc[r];
+    }
+    /* inline formatting of every cell, captured as runs; header cells are bold accent */
+    int(*rs)[MAXC] = (int(*)[MAXC])calloc((size_t)n, sizeof *rs), (*ce)[MAXC] = (int(*)[MAXC])calloc((size_t)n, sizeof *ce);
+    md_ncap = 0;
+    md_capturing = 1;
+    for (int r = 0; r < n; r++)
         if (!isep[r])
+        {
+            int hdr = hdr_sep > 0 && r < hdr_sep;
             for (int c = 0; c < nc[r]; c++)
             {
-                size_t L = u8len(cells[r][c].s, cells[r][c].l);
-                if (L > wd[c])
-                    wd[c] = L;
+                rs[r][c] = md_ncap;
+                md_inline(cells[r][c].s, cells[r][c].l, hdr ? cAccent : cFg, hdr ? CFE_BOLD : 0);
+                ce[r][c] = md_ncap;
             }
-    }
+        }
+    md_capturing = 0;
+    /* natural column widths, then shrink the widest columns until the table fits the chat */
+    int wd[MAXC] = {0}, minw[MAXC] = {0}, mw, mword;
+    MdSegs sg[MAXC];
+    memset(sg, 0, sizeof sg);
+    for (int r = 0; r < n; r++)
+        for (int c = 0; c < (isep[r] ? 0 : nc[r]); c++)
+        {
+            sg[0].n = 0;
+            md_wrap(rs[r][c], ce[r][c], 0, &sg[0], &mw, &mword);
+            if (mw > wd[c])
+                wd[c] = mw;
+            if (mword > minw[c])
+                minw[c] = mword;
+        }
+    int avail = code_cols() + 2, tot = 1 + 3 * ncols;
+    for (int c = 0; c < ncols; c++)
+        tot += wd[c];
+    for (int pass = 0; pass < 2 && tot > avail; pass++)
+        while (tot > avail)
+        { /* pass 0 keeps whole words; pass 1 breaks them */
+            int best = -1;
+            for (int c = 0; c < ncols; c++)
+                if (wd[c] > (pass ? 3 : minw[c]) && (best < 0 || wd[c] > wd[best]))
+                    best = c;
+            if (best < 0)
+                break;
+            wd[best]--;
+            tot--;
+        }
+    SB pd = {0}; /* borders and padding, written in one run */
+#define PFLUSH()                                 \
+    do                                           \
+    {                                            \
+        if (pd.n)                                \
+            re_add(pd.p, pd.n, cDim, 0, MONO);   \
+        pd.n = 0;                                \
+    } while (0)
     for (int r = 0; r < n; r++)
     {
-        SB o = {0};
+        re_bg = cCodeBg;
         if (isep[r])
         {
-            sb_putc(&o, ' ');
+            sb_putc(&pd, ' ');
             for (int c = 0; c < ncols; c++)
             {
-                for (size_t k = 0; k < wd[c] + 2; k++)
-                    sb_puts(&o, HBAR);
+                for (int k = 0; k < wd[c] + 2; k++)
+                    sb_puts(&pd, HBAR);
                 if (c + 1 < ncols)
-                    sb_puts(&o, CROSS);
+                    sb_puts(&pd, CROSS);
             }
-            sb_putc(&o, ' ');
-            re_code(sbs(&o), o.n, cDim, 0);
+            sb_putc(&pd, ' ');
+            PFLUSH();
+            re_bg = CLR_INVALID;
+            re_nl();
+            continue;
         }
-        else
+        int H = 1;
+        for (int c = 0; c < nc[r]; c++)
         {
-            sb_putc(&o, ' ');
+            sg[c].n = 0;
+            int lines = md_wrap(rs[r][c], ce[r][c], wd[c], &sg[c], &mw, &mword);
+            if (lines > H)
+                H = lines;
+        }
+        for (int L = 0; L < H; L++)
+        {
+            sb_putc(&pd, ' ');
             for (int c = 0; c < ncols; c++)
             {
-                sb_putc(&o, ' ');
-                if (c < nc[r])
-                    sb_add(&o, cells[r][c].s, cells[r][c].l);
-                size_t L = c < nc[r] ? u8len(cells[r][c].s, cells[r][c].l) : 0;
-                for (size_t k = L; k < wd[c]; k++)
-                    sb_putc(&o, ' ');
-                sb_putc(&o, ' ');
+                int used = 0;
+                sb_putc(&pd, ' ');
+                for (int k = 0; c < nc[r] && k < sg[c].n; k++)
+                {
+                    MdSeg *g = &sg[c].p[k];
+                    if (g->line != L)
+                        continue;
+                    used += g->w;
+                    if (g->run < 0)
+                    {
+                        sb_putc(&pd, ' ');
+                        continue;
+                    }
+                    PFLUSH();
+                    MdRun *u = &md_cap[g->run];
+                    LONG a = u->url ? re_pos() : 0;
+                    re_add(u->s + g->off, g->len, u->col, u->eff, MONO);
+                    if (u->url)
+                        url_link(a, re_pos(), u->url, u->un);
+                }
+                for (; used < wd[c]; used++)
+                    sb_putc(&pd, ' ');
+                sb_putc(&pd, ' ');
                 if (c + 1 < ncols)
-                    sb_puts(&o, VBAR);
+                    sb_puts(&pd, VBAR);
             }
-            sb_putc(&o, ' ');
-            re_code(sbs(&o), o.n, (hdr_sep > 0 && r < hdr_sep) ? cAccent : cFg, (hdr_sep > 0 && r < hdr_sep) ? CFE_BOLD : 0);
+            sb_putc(&pd, ' ');
+            PFLUSH();
+            re_bg = CLR_INVALID;
+            re_nl();
+            re_bg = cCodeBg;
         }
-        free(o.p);
-        re_nl();
+        re_bg = CLR_INVALID;
     }
+#undef PFLUSH
+    free(pd.p);
+    for (int c = 0; c < MAXC; c++)
+        free(sg[c].p);
+    free(rs);
+    free(ce);
     free(cells);
     free(nc);
     free(isep);
