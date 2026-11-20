@@ -30,6 +30,8 @@ typedef struct
     char mcpoff[1024];                       /* MCP servers switched off in the input box menu: "|name|name|" */
     int shot;                                /* 1 = offer the screenshot tool (asks every time) */
     char tooloff[1024];                      /* built-in tools switched off in the Tools dialog: "|name|name|" */
+    int agentsmd;                            /* 1 = add AGENTS.md (root folder, %USERPROFILE%\.agents) to the system prompt */
+    char skillon[1024];                      /* skills switched ON in the Skills dialog (new ones start off): "|name|name|" */
     int nothink;                             /* 1 = thinking switched off in the input box: chat_template_kwargs enable_thinking false */
     int copilot;                             /* 1 = copilot mode: tray icon, global hotkey, floating panel */
     char cphk[48];                           /* copilot hotkey, e.g. "Ctrl+Shift+Space" */
@@ -93,6 +95,8 @@ static const Field FIELDS[] = {
     FLD("mcpoff", NULL, 0, mcpoff, NULL, NULL), /* no settings control: set from the MCP button */
     FLD("shot", "Allow screenshot tool (asks every time)", 3, shot, NULL, NULL),
     FLD("tooloff", NULL, 0, tooloff, NULL, NULL), /* no settings control: the Tools dialog */
+    FLD("skillon", NULL, 0, skillon, NULL, NULL), /* no settings control: the Skills dialog */
+    FLD("agentsmd", "Load AGENTS.md into the system prompt", 3, agentsmd, NULL, NULL),
     FLD("nothink", NULL, 2, nothink, NULL, NULL), /* no settings control: the Think button in the input box */
     FLD("copilot", "Copilot mode (tray icon + floating panel)", 3, copilot, NULL, NULL),
     FLD("cphk", "Copilot hotkey", 0, cphk, NULL, NULL),
@@ -122,6 +126,7 @@ static void cfg_defaults(Cfg *g)
     strcpy(g->toolmax, "25");
     g->fade = 1;
     g->mem_on = 1;
+    g->agentsmd = 1;
     g->ctx_limit = 0;
     g->autocompact = 1;
     g->precompact = 1;

@@ -1,6 +1,7 @@
 /* tools_dlg.h - "Built-in tools" dialog: switch single built-in tools off to save tokens and avoid needless calls.
    The off list (G.tooloff, "|name|name|") is saved in settings and in profiles. Switched-off tools are not sent to the
-   model; a call to one anyway (e.g. remembered from earlier in the chat) is refused. MCP tools: the MCP button. */
+   model; a call to one anyway (e.g. remembered from earlier in the chat) is refused. MCP tools: the MCP button.
+   chk_dialog() is the shared check-list window; the Skills dialog (skills.h) uses it too. */
 #ifndef LLAMAC_TOOLS_DLG_H
 #define LLAMAC_TOOLS_DLG_H
 
@@ -18,12 +19,24 @@ typedef struct
     char desc[160];
     int tok;
     int inset; /* allowed by the tool set; rows it excludes are greyed out and keep their tick */
+    char *tip; /* hover text (malloc'ed, may be NULL) */
 } TdRow;
+/* what differs between the check-list dialogs */
+typedef struct
+{
+    const wchar_t *title;
+    const char *info;  /* one or two lines above the rows */
+    const char *empty; /* shown instead of rows */
+    const char *what;  /* plural noun for the total line, e.g. "built-in tools" */
+    int liston;        /* 1: the list holds the ticked names, 0: the unticked ones */
+    int base;          /* tokens added once when at least one row is ticked */
+} ChkSpec;
 static TdRow td_rows[TD_MAX];
 static int td_chk[TD_MAX]; /* tick state of the owner-drawn checkboxes */
 static int td_n, td_done, td_ok;
 static char *td_list;
 static size_t td_cap;
+static const ChkSpec *td_spec;
 
 static void tip_add2(HWND tt, HWND owner, HWND ctl, const char *tip)
 {
@@ -48,18 +61,28 @@ static int tool_tokens(const Tool *t, double cpt)
 }
 static void td_total(HWND h)
 {
-    int on = 0, tok = 0;
-    wchar_t s[200];
+    int on = 0, tok = 0, n = 0;
+    char s[300];
+    wchar_t *w;
     for (int i = 0; i < td_n; i++)
-        if (td_rows[i].inset && td_chk[i])
+        if (td_rows[i].inset)
         {
-            on++;
-            tok += td_rows[i].tok;
+            n++;
+            if (td_chk[i])
+            {
+                on++;
+                tok += td_rows[i].tok;
+            }
         }
-    _snwprintf(s, 200, L"Sent: %d of %d built-in tools, about %d tokens in every request%s", on, td_n, tok,
-               ms_known() ? L"" : L" (rough: measured after the first reply with this model)");
-    s[199] = 0;
-    SetDlgItemTextW(h, IDC_TD_TOTAL, s);
+    if (on)
+        tok += td_spec->base;
+    if (!td_spec->liston)
+        n = td_n; /* tools: greyed-out rows are counted, as before */
+    snprintf(s, sizeof s, "Sent: %d of %d %s, about %d tokens in every request%s", on, n, td_spec->what, tok,
+             ms_known() ? "" : " (rough: measured after the first reply with this model)");
+    w = w_from(s);
+    SetDlgItemTextW(h, IDC_TD_TOTAL, w);
+    free(w);
 }
 /* owner-drawn checkbox: box border green = ticked and sent, red = unticked, grey = not in the tool set (tick kept) */
 static void td_draw_chk(DRAWITEMSTRUCT *d, int i)
@@ -157,9 +180,11 @@ static LRESULT CALLBACK TdProc(HWND h, UINT m, WPARAM w, LPARAM l)
             td_total(h);
         }
         else if (id == IDOK)
-        { /* tools not listed now (their setting is off) keep their state */
+        { /* names not listed now (their setting is off) keep their state; greyed-out rows cannot change, and a
+             greyed-out duplicate (a skill hidden by the project's one) must not overwrite the shown row */
             for (int i = 0; i < td_n; i++)
-                name_list_set(td_list, td_cap, td_rows[i].name, !td_chk[i]);
+                if (td_rows[i].inset)
+                    name_list_set(td_list, td_cap, td_rows[i].name, td_spec->liston ? td_chk[i] : !td_chk[i]);
             td_ok = 1;
             td_done = 1;
         }
@@ -175,9 +200,9 @@ static LRESULT CALLBACK TdProc(HWND h, UINT m, WPARAM w, LPARAM l)
     }
     return DefWindowProcW(h, m, w, l);
 }
-/* edits list ("|name|...|" of switched-off tools) in place; 1 = OK pressed. toolset / tools_on: the values to show the
-   dialog for (the Settings dialog passes its not yet applied choices) */
-static int tools_dialog(HWND owner, char *list, size_t cap, int toolset, int tools_on)
+/* the check-list window over td_rows[0..td_n); edits list in place (see ChkSpec.liston); 1 = OK pressed. Frees the
+   rows' tips. */
+static int chk_dialog(HWND owner, const ChkSpec *spec, char *list, size_t cap)
 {
     static int reg = 0;
     const int rowH = 28, colW = 560, nameW = 180, tokW = 80, top = 62;
@@ -186,21 +211,6 @@ static int tools_dialog(HWND owner, char *list, size_t cap, int toolset, int too
     HWND h, tt;
     DWORD st = WS_POPUP | WS_CAPTION | WS_SYSMENU;
     MSG msg;
-    double cpt = ms_cpt(); /* calibrated for the current model (3.0 until measured) */
-    td_n = 0;
-    tl_enter();
-    for (int i = 0; i < g_ntools && td_n < TD_MAX; i++)
-        if (g_tools[i].kind == 0)
-        {
-            TdRow *r = &td_rows[td_n++];
-            const char *d = g_tools[i].desc, *dot = strstr(d, ". ");
-            size_t L = dot ? (size_t)(dot - d) + 1 : strlen(d);
-            snprintf(r->name, sizeof r->name, "%s", g_tools[i].name);
-            snprintf(r->desc, sizeof r->desc, "%.*s", (int)(L < 150 ? L : 150), d);
-            r->tok = tool_tokens(&g_tools[i], cpt);
-            r->inset = toolset_allows(toolset, &g_tools[i]);
-        }
-    tl_leave();
     if (!reg)
     {
         WNDCLASSEXW wc;
@@ -222,7 +232,7 @@ static int tools_dialog(HWND owner, char *list, size_t cap, int toolset, int too
     SetRect(&wr, 0, 0, CW, CH);
     AdjustWindowRectEx(&wr, st, FALSE, WS_EX_DLGMODALFRAME);
     GetWindowRect(owner, &orr);
-    h = CreateWindowExW(WS_EX_DLGMODALFRAME, L"LCTools", L"Built-in tools", st, orr.left + 40, orr.top + 40, wr.right - wr.left, wr.bottom - wr.top,
+    h = CreateWindowExW(WS_EX_DLGMODALFRAME, L"LCTools", spec->title, st, orr.left + 40, orr.top + 40, wr.right - wr.left, wr.bottom - wr.top,
                         owner, NULL, GetModuleHandleW(NULL), NULL);
     apply_frame(h);
     tt = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, NULL, WS_POPUP | TTS_NOPREFIX | TTS_ALWAYSTIP, CW_USEDEFAULT, CW_USEDEFAULT,
@@ -233,16 +243,8 @@ static int tools_dialog(HWND owner, char *list, size_t cap, int toolset, int too
         SendMessageW(tt, TTM_SETDELAYTIME, TTDT_AUTOPOP, 30000);
     }
     {
-        const char *info = !tools_on       ? "Tools are off in Settings: none of these is sent."
-                           : toolset == 2  ? "Tool set is None: none of these is sent. Ticks are kept for the All and Chat sets."
-                           : toolset == 1  ? "Tool set is Chat: greyed-out tools are not sent; their ticks are kept for the All set."
-                                           : "Untick what you do not need now: fewer tool definitions, fewer tokens and fewer wrong tool calls.";
-        char line[400];
-        wchar_t *wl;
-        HWND s;
-        snprintf(line, sizeof line, "%s\nTools that need a setting (root folder, file writes, shell, screenshots) are listed when it is on. MCP tools: the MCP button.", info);
-        wl = w_from(line);
-        s = CreateWindowExW(0, L"STATIC", wl, WS_CHILD | WS_VISIBLE | SS_NOPREFIX, 20, 12, CW - 40, 40, h, (HMENU)IDC_TD_INFO, NULL, NULL);
+        wchar_t *wl = w_from(spec->info);
+        HWND s = CreateWindowExW(0, L"STATIC", wl, WS_CHILD | WS_VISIBLE | SS_NOPREFIX, 20, 12, CW - 40, 40, h, (HMENU)IDC_TD_INFO, NULL, NULL);
         SendMessageW(s, WM_SETFONT, (WPARAM)hFont, TRUE);
         free(wl);
     }
@@ -257,7 +259,7 @@ static int tools_dialog(HWND owner, char *list, size_t cap, int toolset, int too
         _snwprintf(tk, 24, L"~%d tok", td_rows[i].tok);
         tk[23] = 0;
         ts = CreateWindowExW(0, L"STATIC", tk, WS_CHILD | WS_VISIBLE | SS_RIGHT, x + colW - tokW - 14, y + 4, tokW, 20, h, (HMENU)(INT_PTR)(IDC_TD_TOK + i), NULL, NULL);
-        td_chk[i] = !name_in_list(list, td_rows[i].name);
+        td_chk[i] = spec->liston ? name_in_list(list, td_rows[i].name) : !name_in_list(list, td_rows[i].name);
         if (!td_rows[i].inset)
         {
             EnableWindow(cb, FALSE);
@@ -266,24 +268,20 @@ static int tools_dialog(HWND owner, char *list, size_t cap, int toolset, int too
         SendMessageW(cb, WM_SETFONT, (WPARAM)hFont, TRUE);
         SendMessageW(ds, WM_SETFONT, (WPARAM)hFont, TRUE);
         SendMessageW(ts, WM_SETFONT, (WPARAM)hFont, TRUE);
-        if (tt)
+        if (tt && td_rows[i].tip)
         { /* the full description on hover */
-            tl_enter();
-            for (int k = 0; k < g_ntools; k++)
-                if (!strcmp(g_tools[k].name, td_rows[i].name))
-                {
-                    tip_add2(tt, h, cb, g_tools[k].desc);
-                    tip_add2(tt, h, ds, g_tools[k].desc);
-                }
-            tl_leave();
+            tip_add2(tt, h, cb, td_rows[i].tip);
+            tip_add2(tt, h, ds, td_rows[i].tip);
         }
         free(wn);
         free(wd);
     }
     if (!td_n)
     {
-        HWND s = CreateWindowExW(0, L"STATIC", L"No built-in tools are available with the current settings.", WS_CHILD | WS_VISIBLE, 20, top, CW - 40, 24, h, NULL, NULL, NULL);
+        wchar_t *we = w_from(spec->empty);
+        HWND s = CreateWindowExW(0, L"STATIC", we, WS_CHILD | WS_VISIBLE | SS_NOPREFIX, 20, top, CW - 40, 44, h, NULL, NULL, NULL);
         SendMessageW(s, WM_SETFONT, (WPARAM)hFont, TRUE);
+        free(we);
     }
     {
         HWND tot = CreateWindowExW(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_NOPREFIX, 20, CH - 92, CW - 40, 22, h, (HMENU)IDC_TD_TOTAL, NULL, NULL);
@@ -296,6 +294,7 @@ static int tools_dialog(HWND owner, char *list, size_t cap, int toolset, int too
     }
     td_list = list;
     td_cap = cap;
+    td_spec = spec;
     td_total(h);
     td_done = td_ok = 0;
     EnableWindow(owner, FALSE);
@@ -309,7 +308,48 @@ static int tools_dialog(HWND owner, char *list, size_t cap, int toolset, int too
     EnableWindow(owner, TRUE);
     DestroyWindow(h);
     SetForegroundWindow(owner);
+    for (int i = 0; i < td_n; i++)
+    {
+        free(td_rows[i].tip);
+        td_rows[i].tip = NULL;
+    }
     return td_ok;
+}
+/* use_skill is a built-in tool, but the Skills dialog controls it: not listed or counted here */
+static int tool_in_tools_dlg(const Tool *t) { return t->kind == 0 && strcmp(t->rname, "use_skill") != 0; }
+/* edits list ("|name|...|" of switched-off tools) in place; 1 = OK pressed. toolset / tools_on: the values to show the
+   dialog for (the Settings dialog passes its not yet applied choices) */
+static int tools_dialog(HWND owner, char *list, size_t cap, int toolset, int tools_on)
+{
+    ChkSpec sp;
+    char info[400];
+    double cpt = ms_cpt(); /* calibrated for the current model (3.0 until measured) */
+    td_n = 0;
+    tl_enter();
+    for (int i = 0; i < g_ntools && td_n < TD_MAX; i++)
+        if (tool_in_tools_dlg(&g_tools[i]))
+        {
+            TdRow *r = &td_rows[td_n++];
+            const char *d = g_tools[i].desc, *dot = strstr(d, ". ");
+            size_t L = dot ? (size_t)(dot - d) + 1 : strlen(d);
+            snprintf(r->name, sizeof r->name, "%s", g_tools[i].name);
+            snprintf(r->desc, sizeof r->desc, "%.*s", (int)(L < 150 ? L : 150), d);
+            r->tok = tool_tokens(&g_tools[i], cpt);
+            r->inset = toolset_allows(toolset, &g_tools[i]);
+            r->tip = xstrdup(d);
+        }
+    tl_leave();
+    snprintf(info, sizeof info, "%s\nTools that need a setting (root folder, file writes, shell, screenshots) are listed when it is on. MCP tools: the MCP button.",
+             !tools_on      ? "Tools are off in Settings: none of these is sent."
+             : toolset == 2 ? "Tool set is None: none of these is sent. Ticks are kept for the All and Chat sets."
+             : toolset == 1 ? "Tool set is Chat: greyed-out tools are not sent; their ticks are kept for the All set."
+                            : "Untick what you do not need now: fewer tool definitions, fewer tokens and fewer wrong tool calls.");
+    memset(&sp, 0, sizeof sp);
+    sp.title = L"Built-in tools";
+    sp.info = info;
+    sp.empty = "No built-in tools are available with the current settings.";
+    sp.what = "built-in tools";
+    return chk_dialog(owner, &sp, list, cap);
 }
 /* "Tools 5/18": built-in tools actually sent (ticked and in the tool set) / available */
 static void tools_btn_update(void)
@@ -321,7 +361,7 @@ static void tools_btn_update(void)
         return;
     tl_enter();
     for (int i = 0; i < g_ntools; i++)
-        if (g_tools[i].kind == 0)
+        if (tool_in_tools_dlg(&g_tools[i]))
         {
             n++;
             ticked += !name_in_list(G.tooloff, g_tools[i].name);

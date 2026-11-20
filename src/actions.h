@@ -2,6 +2,8 @@
 #ifndef LLAMAC_ACTIONS_H
 #define LLAMAC_ACTIONS_H
 
+static void sys_extra_refresh(void); /* skills.h: root folder note + AGENTS.md for the system message, before each request */
+
 /* ---------- chat actions ---------- */
 static void set_busy(int b)
 {
@@ -335,6 +337,7 @@ static void start_gen_px(int parent, int cont, const char *prefill)
     Job *j = (Job *)calloc(1, sizeof *j);
     g_req_lim = lim;
     g_cpt = ms_cpt();
+    sys_extra_refresh();
     j->body = build_request(cur, &G);
     g_job_chars = g_req_chars;
     j->base_off = prefill ? (int)strlen(prefill) : 0;
@@ -403,6 +406,7 @@ static void act_queue(void)
     set_status("Queued: your message is sent when the current reply is complete (Stop puts it back in the box).");
 }
 static void do_send(void);
+static int skill_attach(Node *u, const char *text); /* skills.h: "/name" attaches a skill */
 /* called whenever the app becomes idle */
 static void queue_flush(void)
 {
@@ -461,6 +465,7 @@ static void do_send(void)
     setstr(&cur->n[u].content, t);
     for (int i = 0; i < npend; i++)
         att_add(&cur->n[u], pend[i].kind, pend[i].name, pend[i].data, pend[i].mime);
+    skill_attach(&cur->n[u], t);
     if (!strcmp(cur->name, "New chat"))
     {
         const char *src = *t ? t : (npend ? pend[0].name : "Chat");

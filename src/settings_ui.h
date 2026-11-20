@@ -36,8 +36,9 @@ static void strip_cr(char *s)
    Besides the system prompt a profile keeps the settings that suit a kind of work and a model: the reminder, the
    tool set, sampling values, the reasoning budget and the template kwargs. Entries of older versions have only
    name and text; picking them changes only the prompt. */
-static const char *const PROF_KEYS[] = {"remind", "toolset", "temp", "top_k", "top_p", "min_p", "rbud", "kwargs", "tooloff"};
+static const char *const PROF_KEYS[] = {"remind", "toolset", "temp", "top_k", "top_p", "min_p", "rbud", "kwargs", "tooloff", "skillon"};
 static char s_tooloff[1024]; /* the dialog's copy of G.tooloff (Built-in tools... button, profiles); applied with OK */
+static char s_skillon[1024]; /* the dialog's copy of G.skillon (profiles); applied with OK */
 #define NPK ((int)(sizeof PROF_KEYS / sizeof PROF_KEYS[0]))
 typedef struct
 {
@@ -67,6 +68,8 @@ static char *ctl_value(int fi)
     char b[16];
     if (fi >= 0 && !strcmp(FIELDS[fi].key, "tooloff"))
         return xstrdup(s_tooloff);
+    if (fi >= 0 && !strcmp(FIELDS[fi].key, "skillon"))
+        return xstrdup(s_skillon);
     if (fi < 0 || !setCtl[fi])
         return NULL;
     if (!strcmp(FIELDS[fi].key, "toolset"))
@@ -82,6 +85,11 @@ static void ctl_set(int fi, const char *v)
     if (fi >= 0 && v && !strcmp(FIELDS[fi].key, "tooloff"))
     {
         snprintf(s_tooloff, sizeof s_tooloff, "%s", v);
+        return;
+    }
+    if (fi >= 0 && v && !strcmp(FIELDS[fi].key, "skillon"))
+    {
+        snprintf(s_skillon, sizeof s_skillon, "%s", v);
         return;
     }
     if (fi < 0 || !setCtl[fi] || !v)
@@ -356,6 +364,7 @@ static const SItem SLAY_R[] = {
     {"autoappr", NULL, "Runs every tool call without asking, including writes, deletes and shell commands.", 0},
     {"toolmax", "Max tool rounds", "How many tool-call rounds the model may do for one message before it is stopped. Empty or 0 = 10.", 0},
     {"mem", NULL, "Saved facts about you are added to the system prompt - the ones that match the chat's first message first. With tools on, the model can save and search them (memory_save / memory_search).", 0},
+    {"agentsmd", NULL, "Adds AGENTS.md to the system prompt when it exists: %USERPROFILE%\\.agents\\AGENTS.md (your rules for every project) and AGENTS.md in the root folder (the project's rules: build and test commands, conventions). Read again before every request; costs its tokens in every request: click the context gauge to see how many.", 0},
     {"shot", NULL, "Adds the screenshot tool: the model can ask to see the screen or a window (needs a vision model). Every screenshot asks first, even with auto-approve, because the screen can show anything, including personal or confidential data.", 0},
     {"verify", "Verify command", "Run after every tool round that changed files, e.g. build.bat or npm test (cmd.exe, in the root folder, 5 min limit). Its result is added to the tool result, so the model sees build errors at once. Runs without asking: it is your own command.", 0},
     {"!mcp", NULL, NULL, 0},
@@ -526,12 +535,14 @@ static LRESULT CALLBACK SetProc(HWND h, UINT m, WPARAM w, LPARAM l)
             path_clean(G.fsroot);
             path_clean(G.kvdir);
             snprintf(G.tooloff, sizeof G.tooloff, "%s", s_tooloff);
+            snprintf(G.skillon, sizeof G.skillon, "%s", s_skillon);
             cfg_save();
             tools_apply_settings();
             cp_apply(); /* copilot mode: tray icon and hotkey on / off */
             layout(); /* the MCP and Tools buttons in the input box come and go with "Enable tools" */
             mcp_btn_update();
             tools_btn_update();
+            skills_btn_update();
             set_theme();
             render_all();
             DestroyWindow(h);
@@ -572,6 +583,7 @@ static void show_settings(void)
     const int halfW = (colW - 10) / 2, halfLab = 104;
     sysp_load();
     snprintf(s_tooloff, sizeof s_tooloff, "%s", G.tooloff);
+    snprintf(s_skillon, sizeof s_skillon, "%s", G.skillon);
     /* height of each column of the layout (same walk as the creation loop below) */
     int colH[2] = {0, 0};
     for (int c = 0; c < 2; c++)

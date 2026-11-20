@@ -113,6 +113,32 @@ static void t_plain(Cfg *g)
     free(b);
     conv_free(c);
 }
+/* AGENTS.md text joins the one system message, after the system prompt */
+static void t_agents(Cfg *g)
+{
+    Conv *c = agent_chat(1, 100);
+    char *b, *sys, *agm, *env;
+    strcpy(g->sys, "SYSPROMPT");
+    g_agents_txt = xstrdup("# Project instructions\nRun build.bat");
+    g_env_txt = xstrdup("# File access\nROOTNOTE");
+    g_req_lim = 0;
+    b = build_request(c, g);
+    sys = strstr(b, "SYSPROMPT");
+    agm = strstr(b, "Run build.bat");
+    env = strstr(b, "ROOTNOTE");
+    CHECK(valid_json(b));
+    CHECK(sys && agm && env && sys < env && env < agm); /* system prompt, root folder note, AGENTS.md */
+    free(g_env_txt);
+    g_env_txt = NULL;
+    CHECK(strstr(b, "SYSPROMPT\\n\\n# File access") != NULL); /* JSON-escaped in the body */
+    CHECK(strstr(b, "ROOTNOTE\\n\\n# Project instructions") != NULL);
+    CHECK(strstr(agm + 1, "Run build.bat") == NULL); /* once */
+    free(b);
+    free(g_agents_txt);
+    g_agents_txt = NULL;
+    g->sys[0] = 0;
+    conv_free(c);
+}
 static void t_elided(Cfg *g)
 {
     Conv *c = agent_chat(3, 2000);
@@ -288,6 +314,7 @@ int main(int argc, char **argv)
     g_out = argc > 1 ? argv[1] : NULL;
     t_plain(&g);
     t_elided(&g);
+    t_agents(&g);
     t_reminder(&g);
     t_fit(&g);
     t_logprobs(&g);

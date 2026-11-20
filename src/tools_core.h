@@ -185,4 +185,142 @@ static int tc_count(const char *json)
     return n;
 }
 
+/* ---------- SKILL.md front matter (Agent Skills format) ----------
+   A "---" line, "key: value" lines, a "---" line, then the body. Only name and description are read. A value may be
+   plain, "double" or 'single' quoted, a > or | block, or go on over more-indented lines (all joined with spaces).
+   Returns the offset of the body; 0 without front matter (name and desc are then empty). */
+static int fm_fence(const char *p, const char *e)
+{
+    while (e > p && (e[-1] == '\r' || e[-1] == ' ' || e[-1] == '\t'))
+        e--;
+    return e - p == 3 && !strncmp(p, "---", 3);
+}
+/* appends one line's piece of a value; q: the open quote character (0 = plain), cleared when the quote closes */
+static void fm_piece(SB *v, const char *p, const char *e, char *q)
+{
+    while (p < e && (*p == ' ' || *p == '\t'))
+        p++;
+    while (e > p && (e[-1] == '\r' || e[-1] == ' ' || e[-1] == '\t'))
+        e--;
+    if (p == e)
+        return;
+    if (v->n && v->p[v->n - 1] != ' ')
+        sb_putc(v, ' ');
+    if (!*q)
+    {
+        sb_add(v, p, (size_t)(e - p));
+        return;
+    }
+    for (; p < e; p++)
+    {
+        if (*p == *q)
+        {
+            if (*q == '\'' && p + 1 < e && p[1] == '\'')
+            { /* '' is a quote inside single quotes */
+                sb_putc(v, '\'');
+                p++;
+                continue;
+            }
+            *q = 0;
+            return; /* anything after the closing quote is not part of the value */
+        }
+        if (*q == '"' && *p == '\\' && p + 1 < e)
+        {
+            char c = *++p;
+            sb_putc(v, c == 'n' || c == 't' ? ' ' : c);
+            continue;
+        }
+        sb_putc(v, *p);
+    }
+}
+static void fm_out(SB *v, char *out, size_t cap)
+{
+    size_t n = v->n;
+    while (n && v->p[n - 1] == ' ')
+        n--;
+    if (n >= cap)
+    {
+        n = cap - 1;
+        while (n && ((unsigned char)v->p[n] & 0xC0) == 0x80)
+            n--;
+    }
+    if (n)
+        memcpy(out, v->p, n);
+    out[n] = 0;
+    free(v->p);
+}
+static size_t skill_frontmatter(const char *s, char *name, size_t ncap, char *desc, size_t dcap)
+{
+    const char *p = s, *e, *body = NULL;
+    SB v[2] = {{0}, {0}}; /* name, description */
+    char q[2] = {0, 0};
+    int cur = -1;
+    name[0] = desc[0] = 0;
+    if (!strncmp(p, "\xEF\xBB\xBF", 3))
+        p += 3;
+    e = strchr(p, '\n');
+    if (!e || !fm_fence(p, e))
+        return 0;
+    p = e + 1;
+    while (*p)
+    {
+        e = strchr(p, '\n');
+        if (!e)
+            e = p + strlen(p);
+        if (fm_fence(p, e))
+        {
+            body = *e ? e + 1 : e;
+            break;
+        }
+        if (*p == ' ' || *p == '\t')
+        { /* continuation of the last key's value */
+            if (cur >= 0)
+                fm_piece(&v[cur], p, e, &q[cur]);
+        }
+        else if (*p != '#' && *p != '\r' && p != e)
+        {
+            const char *c = (const char *)memchr(p, ':', (size_t)(e - p)), *k = p, *ke = c;
+            cur = -1;
+            if (c)
+            {
+                while (ke > k && (ke[-1] == ' ' || ke[-1] == '\t'))
+                    ke--;
+                if (ke - k == 4 && !strncmp(k, "name", 4))
+                    cur = 0;
+                else if (ke - k == 11 && !strncmp(k, "description", 11))
+                    cur = 1;
+            }
+            if (cur >= 0)
+            {
+                const char *a = c + 1, *ae = e;
+                while (a < ae && (*a == ' ' || *a == '\t'))
+                    a++;
+                while (ae > a && (ae[-1] == '\r' || ae[-1] == ' ' || ae[-1] == '\t'))
+                    ae--;
+                v[cur].n = 0; /* a repeated key: the last one counts */
+                q[cur] = 0;
+                if (a < ae && (*a == '>' || *a == '|') && ae - a <= 3)
+                    ; /* block scalar: the indented lines below are the value */
+                else if (a < ae && (*a == '"' || *a == '\''))
+                {
+                    q[cur] = *a;
+                    fm_piece(&v[cur], a + 1, ae, &q[cur]);
+                }
+                else
+                    fm_piece(&v[cur], a, ae, &q[cur]);
+            }
+        }
+        p = *e ? e + 1 : e;
+    }
+    if (!body)
+    { /* no closing fence: not front matter */
+        free(v[0].p);
+        free(v[1].p);
+        return 0;
+    }
+    fm_out(&v[0], name, ncap);
+    fm_out(&v[1], desc, dcap);
+    return (size_t)(body - s);
+}
+
 #endif /* LLAMAC_TOOLS_CORE_H */

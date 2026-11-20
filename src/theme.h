@@ -108,9 +108,9 @@ static void rrect(HDC dc, const RECT *r, int rad, COLORREF fill, COLORREF line)
     DeleteObject(b);
     DeleteObject(p);
 }
-/* the bottom dock: composer buttons (+, T, M) are glyphs with an optional count badge ("T\t18/22"), Send is an
+/* the bottom dock: composer buttons (+, T, S, M) are glyphs with an optional count badge ("T\t18/22"), Send is an
    arrow / stop square, the actions row is small quiet text; Delete buttons turn red on hover */
-static int is_tool_glyph(int id) { return id == IDC_ATTACH || id == IDC_TOOLSBTN || id == IDC_MCPBTN || id == IDC_THINKBTN; }
+static int is_tool_glyph(int id) { return id == IDC_ATTACH || id == IDC_TOOLSBTN || id == IDC_SKILLSBTN || id == IDC_MCPBTN || id == IDC_THINKBTN; }
 static int is_action(int id) { return (id >= IDC_REGEN && id <= IDC_COPY && id != IDC_SEND && id != IDC_ATTACH) || id == IDC_DELC || id == IDC_EDITREPLY || (id >= IDC_CP_COPY && id <= IDC_CP_HIDE); }
 static void draw_dock_btn_dc(DRAWITEMSTRUCT *d);
 static void draw_dock_btn(DRAWITEMSTRUCT *d)
@@ -212,7 +212,7 @@ static void draw_btn(DRAWITEMSTRUCT *d)
         return;
     }
     int primary = (id == IDC_NEW || id == IDC_SEND || id == IDOK), danger = (id == IDC_SEND && busy);
-    COLORREF par = (id == IDC_ATTACH || id == IDC_SEND || id == IDC_MCPBTN || id == IDC_TOOLSBTN) ? cSurf : (id == IDC_NEW || id == IDOK || id == IDCANCEL || id == IDC_RESET) ? cPanel
+    COLORREF par = (id == IDC_ATTACH || id == IDC_SEND || id == IDC_MCPBTN || id == IDC_TOOLSBTN || id == IDC_SKILLSBTN) ? cSurf : (id == IDC_NEW || id == IDOK || id == IDCANCEL || id == IDC_RESET) ? cPanel
                                                                                                                                      : cBg;
     COLORREF bg, fg, ln;
     if (primary)

@@ -20,6 +20,8 @@ static char *fs_call(const char *tool, J *args);                 /* tools_fs.h *
 static char *fs_preview(const char *tool, J *args);              /* tools_fs.h: diff for the approval dialog */
 static char *fs_run_cmd(const char *cmd, const char *cwdrel, int tmo, int need_shell); /* tools_fs.h */
 static char *guide_call(J *args);                                /* below */
+static char *skill_call(J *args);                                /* skills.h */
+static void skills_register(void);                               /* skills.h */
 static char *sysinfo_call(void);                                 /* tools_extra.h */
 static char *plan_call(J *a);
 static char *ask_call(J *a);
@@ -88,6 +90,21 @@ static void tools_clear(int kind, int srv)
     g_ntools = k;
     tl_leave();
 }
+/* removes one tool, so a tool whose description depends on the user's choices can be registered again */
+static void tool_del(const char *name)
+{
+    tl_enter();
+    for (int i = 0; i < g_ntools; i++)
+        if (!strcmp(g_tools[i].name, name))
+        {
+            free(g_tools[i].desc);
+            free(g_tools[i].schema);
+            memmove(&g_tools[i], &g_tools[i + 1], (size_t)(g_ntools - i - 1) * sizeof(Tool));
+            g_ntools--;
+            break;
+        }
+    tl_leave();
+}
 static int tools_count(int kind)
 {
     int n = 0;
@@ -130,7 +147,7 @@ static int toolset_allows(int set, const Tool *t) /* the tool set alone, ignorin
     if (set == 2)
         return 0;
     if (set == 1 && t->kind == 0)
-        return !strcmp(t->rname, "get_datetime") || !strncmp(t->rname, "memory_", 7) || !strcmp(t->rname, "read_guide") || !strcmp(t->rname, "ask_user");
+        return !strcmp(t->rname, "get_datetime") || !strncmp(t->rname, "memory_", 7) || !strcmp(t->rname, "read_guide") || !strcmp(t->rname, "use_skill") || !strcmp(t->rname, "ask_user");
     return 1;
 }
 static int tool_in_set(const Tool *t)
@@ -363,6 +380,8 @@ static char *tool_execute(const char *name, const char *args)
         res = mem_call(t.rname, a);
     else if (t.kind == 0 && !strcmp(t.rname, "read_guide"))
         res = guide_call(a);
+    else if (t.kind == 0 && !strcmp(t.rname, "use_skill"))
+        res = skill_call(a);
     else if (t.kind == 0 && !strcmp(t.rname, "system_info"))
         res = sysinfo_call();
     else if (t.kind == 0 && !strcmp(t.rname, "update_plan"))
@@ -735,6 +754,7 @@ static void tools_apply_settings(void)
     mem_register();
     date_register();
     guides_register();
+    skills_register();
     extra_register();
     if (G.tools_on && !g_mcp_started)
         mcp_start_async();
@@ -745,6 +765,7 @@ static void tools_startup(void)
     mem_register();
     date_register();
     guides_register();
+    skills_register();
     extra_register();
     if (G.tools_on)
         mcp_start_async();

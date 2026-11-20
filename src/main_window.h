@@ -170,9 +170,9 @@ static void layout(void)
             MoveWindow(B(IDC_DELM), xr - w2 - 2 - w1, yAct + 2, w1, actH - 4, TRUE);
         }
     }
-    { /* composer row: [+ | Think | T | M] [input .........] [Send] - all DOCK_H tall; the input grows upwards */
-        int nb = G.tools_on ? 4 : 2, gw = nb * 42 + 2;
-        const int gids[] = {IDC_ATTACH, IDC_THINKBTN, IDC_TOOLSBTN, IDC_MCPBTN};
+    { /* composer row: [+ | Think | T | S | M] [input .........] [Send] - all DOCK_H tall; the input grows upwards */
+        int nb = G.tools_on ? 5 : 2, gw = nb * 42 + 2;
+        const int gids[] = {IDC_ATTACH, IDC_THINKBTN, IDC_TOOLSBTN, IDC_SKILLSBTN, IDC_MCPBTN};
         SetRect(&rcTools, left, yRow, left + gw, yRow + DOCK_H);
         for (int i = 0; i < nb; i++)
             MoveWindow(B(gids[i]), left + 3 + i * 42, yRow + 4, 38, DOCK_H - 8, TRUE);
@@ -350,6 +350,7 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l)
         mkbtn(h, L"+", IDC_ATTACH);
         mkbtn(h, L"MCP", IDC_MCPBTN);
         mkbtn(h, L"Tools", IDC_TOOLSBTN);
+        mkbtn(h, L"Skills", IDC_SKILLSBTN);
         mkbtn(h, L"\x273B", IDC_THINKBTN);
         mkbtn(h, L"Send", IDC_SEND);
         hFontS = CreateFontW(-13, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Segoe UI");
@@ -404,6 +405,7 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l)
         think_btn_update();
         tools_startup();
         tools_btn_update();
+        skills_btn_update();
         set_status("Connecting...");
         if (!nconv)
             convs_add(conv_new());
@@ -625,6 +627,9 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l)
             break;
         case IDC_TOOLSBTN:
             act_tools();
+            break;
+        case IDC_SKILLSBTN:
+            act_skills();
             break;
         case IDC_THINKBTN:
             act_think();
@@ -1139,6 +1144,7 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE hp, PWSTR cl, int show)
             mem_register();
             date_register();
             guides_register();
+            skills_register();
             extra_register();
             refresh_models(); /* context size, vision, slots */
             if (!strcmp(name, "screenshot"))
@@ -1147,6 +1153,15 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE hp, PWSTR cl, int show)
                 g_vision = 1;
                 res = a ? shot_call(a) : xstrdup("Error: invalid JSON arguments");
                 j_free(a);
+            }
+            else if (!strcmp(name, "agents_md"))
+            { /* not a tool: what is added to the system message after the system prompt */
+                SB t = {0};
+                sys_extra_refresh();
+                sb_puts(&t, g_env_txt ? g_env_txt : "(no root folder note)");
+                sb_puts(&t, "\n\n");
+                sb_puts(&t, g_agents_txt ? g_agents_txt : "(no AGENTS.md)");
+                res = t.p;
             }
             else
                 res = tool_execute(name, args ? args : "{}");

@@ -44,11 +44,24 @@ static void fs_trim(wchar_t *p)
         p[wcslen(p) - 1] = 0;
 }
 
+/* a relative root (e.g. ".\") is taken from the exe folder, like the Browse button and the KV folder do; the process's
+   current folder depends on how llamac was started (shortcut, autostart, command line) */
 static int fs_root(wchar_t *rfull, wchar_t *rfinal)
 {
-    wchar_t *w = w_from(G.fsroot);
-    DWORD n = GetFullPathNameW(w, MAX_PATH, rfull, NULL);
+    wchar_t *w = w_from(G.fsroot), base[MAX_PATH], tmp[MAX_PATH * 2];
+    DWORD n;
+    if (PathIsRelativeW(w) && w[0] != L'\\')
+    {
+        GetModuleFileNameW(NULL, base, MAX_PATH);
+        if (wcsrchr(base, L'\\'))
+            *wcsrchr(base, L'\\') = 0;
+        _snwprintf(tmp, MAX_PATH * 2, L"%ls\\%ls", base, w);
+    }
+    else
+        _snwprintf(tmp, MAX_PATH * 2, L"%ls", w);
+    tmp[MAX_PATH * 2 - 1] = 0;
     free(w);
+    n = GetFullPathNameW(tmp, MAX_PATH, rfull, NULL);
     if (!n || n >= MAX_PATH)
         return 0;
     fs_trim(rfull);
@@ -58,6 +71,18 @@ static int fs_root(wchar_t *rfull, wchar_t *rfinal)
     return 1;
 }
 
+/* "outside the root" error that names the root, so the model can correct the path at once. Per thread: read-only
+   tools run in parallel. */
+static const char *fs_outside(const wchar_t *root, const char *what)
+{
+    static __declspec(thread) char buf[MAX_PATH * 3 + 300];
+    char *r = u_from(root);
+    snprintf(buf, sizeof buf, "%s %s. Only files inside it can be read or written: use a path relative to it (e.g. notes.txt or docs\\plan.md). "
+                              "If the user wants a place outside it, tell them it is not reachable.",
+             what, r);
+    free(r);
+    return buf;
+}
 static const char *fs_resolve(const char *rel, wchar_t *out)
 {
     wchar_t rfull[MAX_PATH], rfinal[MAX_PATH], joined[MAX_PATH * 2], full[MAX_PATH], tmp[MAX_PATH], fin[MAX_PATH];
@@ -76,7 +101,7 @@ static const char *fs_resolve(const char *rel, wchar_t *out)
     if (!n || n >= MAX_PATH)
         return "invalid or too long path";
     if (!fs_inside(rfull, full))
-        return "path is outside the allowed root folder";
+        return fs_outside(rfull, "path is outside the root folder");
     wcscpy(tmp, full);
     for (;;)
     {
@@ -93,11 +118,46 @@ static const char *fs_resolve(const char *rel, wchar_t *out)
     }
     fs_trim(fin);
     if (!fs_inside(rfinal, fin))
-        return "path resolves outside the allowed root folder (link)";
+        return fs_outside(rfull, "path resolves (through a link) outside the root folder");
     wcscpy(out, full);
     return NULL;
 }
 
+/* the system-message note on where the file tools work; NULL when no file tool is sent */
+static char *fs_env_text(void)
+{
+    wchar_t rfull[MAX_PATH], rfinal[MAX_PATH];
+    int any = 0, shell = 0;
+    char *r;
+    SB o = {0};
+    if (!G.tools_on || !G.fsroot[0] || !fs_root(rfull, rfinal))
+        return NULL;
+    tl_enter();
+    for (int i = 0; i < g_ntools; i++)
+        if (g_tools[i].kind == 0 && tool_in_set(&g_tools[i]))
+        {
+            const char *n = g_tools[i].rname;
+            if (!strcmp(n, "read_file") || !strcmp(n, "write_file") || !strcmp(n, "list_directory") || !strcmp(n, "edit_file"))
+                any = 1;
+            if (!strcmp(n, "run_command"))
+                any = shell = 1;
+        }
+    tl_leave();
+    if (!any)
+        return NULL;
+    r = u_from(rfull);
+    sb_puts(&o, "# File access\nYour file tools work only inside this root folder: "); /* not sb_printf: 512-byte limit */
+    sb_puts(&o, r);
+    sb_puts(&o, "\n- Give paths relative to it: notes.txt means ");
+    sb_puts(&o, r);
+    sb_puts(&o, "\\notes.txt. An absolute path must be inside it.\n");
+    sb_puts(&o, "- When the user asks you to save or create a file and names no folder, put it in the root folder.\n");
+    sb_puts(&o, "- Other places (Documents, Desktop, other drives) cannot be read or written. If the user asks for one, tell them instead of trying.");
+    if (shell)
+        sb_puts(&o, "\n- run_command starts in the root folder.");
+    free(r);
+    return o.p;
+}
 static char *fs_rel(const wchar_t *full)
 {
     wchar_t rfull[MAX_PATH], rfinal[MAX_PATH];

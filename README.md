@@ -32,6 +32,8 @@ LlamaC is a single, portable `.exe` with no runtime, Electron, or browser depend
         - [Other built-in tools](#other-built-in-tools)
         - [Switching built-in tools on and off](#switching-built-in-tools-on-and-off)
         - [Guides](#guides)
+        - [Skills](#skills)
+        - [AGENTS.md](#agentsmd)
         - [MCP servers](#mcp-servers)
     - [Long-term memory](#long-term-memory)
     - [Context compression](#context-compression)
@@ -70,6 +72,8 @@ LlamaC is a single, portable `.exe` with no runtime, Electron, or browser depend
 - **File checkpoints.** Files changed by tools are saved first. Going back to an earlier message can restore them.
 - **Tool and MCP switches.** The **Tools** and **MCP** buttons in the input box switch single built-in tools and whole MCP servers on or off, with the token cost of each tool shown.
 - **Guides** let you keep longer instructions in separate Markdown files and load them only when needed.
+- **Skills** in the Agent Skills format (`SKILL.md` folders) from the project and from `%USERPROFILE%\.agents\skills`: tick the ones the model may use, or type `/name` to use one once. See [Skills](#skills).
+- **AGENTS.md** from the root folder and from `%USERPROFILE%\.agents` is added to the system prompt when it exists. See [AGENTS.md](#agentsmd).
 
 ### Rendering and attachments
 
@@ -125,6 +129,8 @@ Turn everything on or off with **Enable tools** in Settings. The model must supp
 `get_datetime` returns the current local date, weekday, time and UTC offset from your computer, so the model never has to guess the date. It is read-only (no approval) and available whenever **Enable tools** is on, with or without a root folder.
 
 ### File tools
+
+File tools work only inside the **Root folder** (Settings). A relative root such as `.\` is taken from the folder of `llamac.exe`, however LlamaC was started. The model is told the root's full path in the system message, and it is asked to use paths relative to the root and to save new files there. A path outside the root is refused with an error that names the root, so the model can correct itself.
 
 | Tool               | Purpose                                           | Asks first |
 | ------------------ | ------------------------------------------------- | ---------- |
@@ -196,6 +202,33 @@ Every built-in tool definition costs tokens in every request. In a new chat with
 ### Guides
 
 Put Markdown files in `data\guides\` (for example `coding-rules.md`). The first line of each file is its description. When guides exist, the model gets a `read_guide` tool. Only the names and descriptions are sent with each request; the model reads a guide when the task needs it. Long rules that otherwise sit in the system prompt then cost tokens only when they are used.
+
+### Skills
+
+Skills use the Agent Skills format: each skill is a folder with a `SKILL.md`. The file starts with YAML front matter that has `name` and `description`, followed by the instructions. The folder can also hold other files the instructions refer to, such as `references/api.md`. LlamaC looks in two places:
+
+- **Project:** `<file tools root folder>\.agents\skills\<name>\SKILL.md`
+- **User:** `%USERPROFILE%\.agents\skills\<name>\SKILL.md`, where tools such as `npx skills` install them
+
+If both places have a skill with the same name, the project's skill is used.
+
+The **S 3/13** button in the input box opens the **Skills** list. It works like the [Tools list](#switching-built-in-tools-on-and-off): a checkbox per skill, its description (marked _(project)_ for project skills), its token cost and a total. Hover a row to see the full description and the folder. Skills are **off until you tick them**, so new skills cost no tokens. A project you clone cannot send its skills to the model either, until you tick them.
+
+- **Ticked skills** are listed, with name and description only, in a `use_skill` tool. The model calls `use_skill` with a skill's name to load its instructions and the list of its other files, and with `file` to read one of those files. Reads stay inside the skill's folder (no `..`, no absolute paths, no links that lead out). `use_skill` is read-only and runs without asking. It is part of Tool set _Chat_, and Tool set _None_ sends no skills.
+- **`/name` at the start of a message**, for example `/tdd add tests for the parser`, attaches that skill's `SKILL.md` to your message. This works for any skill found, ticked or not, and even with tools off. For the rest of the session `use_skill` can also read that skill's other files.
+- **Saved** in the settings, and in a profile when you **Save** the profile.
+- The list is read again when you open the Skills list, apply Settings, or send a `/name` message. Changing the selection changes the tool definitions, so the server reprocesses the prompt once.
+
+### AGENTS.md
+
+[AGENTS.md](https://agents.md) is a README for coding agents: a project's build and test commands, conventions and things to avoid. Many coding tools read it automatically. When **Load AGENTS.md into the system prompt** is on (Settings, Tools & memory; on by default), LlamaC adds these files to the system message if they exist:
+
+1. `%USERPROFILE%\.agents\AGENTS.md`: your own rules for every project.
+2. `<file tools root folder>\AGENTS.md`: the project's rules. It comes second and is marked as taking priority.
+
+- Both are read again before every request, so an edit applies to the next message. The text sent changes only when a file changes, so the server's prompt cache stays valid.
+- Each file is cut at 20,000 characters. Its tokens are spent in every request: click the context gauge to see the **AGENTS.md** line.
+- Only the root folder's AGENTS.md is read. Files in subfolders are not read.
 
 ### MCP servers
 
@@ -376,7 +409,8 @@ src/
   mcp_http.h        MCP over Streamable HTTP (WinHTTP, SSE)
   tools_fs.h        sandboxed file tools, multi_edit, find_symbol, summarize_file
   tools_extra.h     system_info, update_plan, ask_user, screenshot
-  tools_dlg.h       Built-in tools dialog
+  tools_dlg.h       Built-in tools dialog (shared check-list window)
+  skills.h          Agent Skills: discovery, use_skill tool, Skills dialog, /name
   settings_ui.h     settings dialog and profiles
   copilot.h         copilot mode: tray icon, global hotkey, floating panel
   main_window.h     window procedure, layout, context gauge, WinMain
@@ -413,6 +447,8 @@ Only parameters you set in the client are included in the request. When tools ar
 - Tool calls are executed with your Windows account's permissions. Keep approval prompts on for write tools and for MCP servers you do not fully trust.
 - MCP servers are programs you start. Only add servers you trust.
 - `Auto-approve ALL tool calls` skips every prompt, including writes, deletes and shell commands. Combined with the shell tool, the model can run any command without asking.
+- A project's AGENTS.md comes with the repository and goes into the system prompt when that folder is the root folder. Read it first, or switch **Load AGENTS.md** off, for repositories you do not trust.
+- Skills are instructions written by someone else. A project's `.agents\skills` comes with the repository, so read a skill before you tick it. Skills are never offered to the model unless you tick them or type `/name`.
 - Links in model output are only opened when you click them, and only `http`, `https` and `mailto` links.
 - `screenshot` is off by default and asks before every capture, even with auto-approve. The image is kept in the chat file.
 - The **Verify command** runs without asking after file changes, because you typed it yourself. Choose it with care.

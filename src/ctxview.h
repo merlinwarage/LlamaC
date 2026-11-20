@@ -65,13 +65,19 @@ static void ctxview_fill(HWND e)
     int *p, n, lim = G.ctx_limit > 0 ? G.ctx_limit : g_nctx, exact = 1, ntool = 0, nel = 0, ntl = 0;
     char *tl, *dig, note[160];
     int big[5] = {-1, -1, -1, -1, -1};
-    int t_sys, t_dig, t_sum, t_tools, t_usr, t_asst, t_tcall, t_tres, t_att, total;
+    int t_sys, t_agm, t_dig, t_sum, t_tools, t_usr, t_asst, t_tcall, t_tres, t_att, total;
     if (!cur)
         return;
     set_status("Counting tokens with the server's tokenizer ...");
     n = conv_path(cur, &p);
     sb_puts(&sys, G.sys);
-    dig = (g_dig_conv == cur && g_dig_txt) ? xstrdup(g_dig_txt) : mem_digest_for(n ? cur->n[p[0]].content : "");
+    sys_extra_refresh();
+    if (g_env_txt)
+    { /* the root folder note is counted with the system prompt */
+        sb_puts(&sys, "\n\n");
+        sb_puts(&sys, g_env_txt);
+    }
+    dig =(g_dig_conv == cur && g_dig_txt) ? xstrdup(g_dig_txt) : mem_digest_for(n ? cur->n[p[0]].content : "");
     tl = tools_schema_build();
     if (tl)
         for (const char *q = tl; *q; q++)
@@ -121,6 +127,7 @@ static void ctxview_fill(HWND e)
                 sb_puts(&att, m->att[a].data);
     }
     t_sys = count_tokens(sbs(&sys), &exact) + (G.remind[0] ? count_tokens(G.remind, &exact) : 0);
+    t_agm = g_agents_txt ? count_tokens(g_agents_txt, &exact) : 0;
     t_dig = dig ? count_tokens(dig, &exact) : 0;
     t_sum = count_tokens(sbs(&summ), &exact);
     t_tools = tl ? count_tokens(tl, &exact) : 0;
@@ -129,13 +136,14 @@ static void ctxview_fill(HWND e)
     t_tcall = count_tokens(sbs(&tcall), &exact);
     t_tres = count_tokens(sbs(&tres), &exact);
     t_att = count_tokens(sbs(&att), &exact);
-    total = t_sys + t_dig + t_sum + t_tools + t_usr + t_asst + t_tcall + t_tres + t_att;
+    total = t_sys + t_agm + t_dig + t_sum + t_tools + t_usr + t_asst + t_tcall + t_tres + t_att;
     sb_printf(&o, "Context of \"%.80s\"  -  %s\r\n\r\n", cur->name, exact ? "counted by the server's tokenizer" : "ESTIMATED (/tokenize failed)");
     if (lim > 0)
         sb_printf(&o, "Context size %d   |   compression starts at %d   |   reply reserve %d\r\n\r\n", lim, ctx_trigger(lim), reply_reserve(&G, lim));
     else
         sb_puts(&o, "Context size unknown (server not reachable?)\r\n\r\n");
     cv_bar(&o, "System prompt", t_sys, total, G.remind[0] ? "incl. reminder" : "");
+    cv_bar(&o, "AGENTS.md", t_agm, total, G.agentsmd ? "" : "off in Settings");
     cv_bar(&o, "Memory digest", t_dig, total, "");
     cv_bar(&o, "Summary", t_sum, total, "");
     snprintf(note, sizeof note, "%d tool(s), tool set: %s", ntl, G.toolset == 2 ? "none" : G.toolset == 1 ? "chat" : "all");

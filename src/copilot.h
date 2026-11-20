@@ -270,8 +270,8 @@ static void cp_layout(void)
     }
     SendMessageW(hChat, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, MAKELONG(14, 14));
     { /* composer: the same arrangement as in the main window, the input grows upwards */
-        int nb = G.tools_on ? 4 : 2, gw = nb * 42 + 2, yRow = yBox + g_boxH - DOCK_H;
-        const int gids[] = {IDC_ATTACH, IDC_THINKBTN, IDC_TOOLSBTN, IDC_MCPBTN};
+        int nb = G.tools_on ? 5 : 2, gw = nb * 42 + 2, yRow = yBox + g_boxH - DOCK_H;
+        const int gids[] = {IDC_ATTACH, IDC_THINKBTN, IDC_TOOLSBTN, IDC_SKILLSBTN, IDC_MCPBTN};
         SetRect(&cp_rcTools, left, yRow, left + gw, yRow + DOCK_H);
         for (int i = 0; i < nb; i++)
             MoveWindow(B(gids[i]), left + 3 + i * 42, yRow + 4, 38, DOCK_H - 8, FALSE);
@@ -523,7 +523,7 @@ static void cp_create(void)
 /* the controls that move between the main window and the panel */
 static void cp_move(HWND to)
 {
-    HWND c[] = {hChat, hInput, hStatus, B(IDC_ATTACH), B(IDC_THINKBTN), B(IDC_TOOLSBTN), B(IDC_MCPBTN), B(IDC_SEND)};
+    HWND c[] = {hChat, hInput, hStatus, B(IDC_ATTACH), B(IDC_THINKBTN), B(IDC_TOOLSBTN), B(IDC_SKILLSBTN), B(IDC_MCPBTN), B(IDC_SEND)};
     for (int i = 0; i < (int)(sizeof c / sizeof c[0]); i++)
         if (c[i])
             SetParent(c[i], to);

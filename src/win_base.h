@@ -93,7 +93,8 @@ enum
     IDC_CP_COPY,  /* copilot panel header: copy the last reply, new chat, open the main window, hide */
     IDC_CP_NEW,
     IDC_CP_OPEN,
-    IDC_CP_HIDE
+    IDC_CP_HIDE,
+    IDC_SKILLSBTN /* 153: the Skills button in the input box */
 };
 #define WM_APP_MSG (WM_APP + 1)
 #define WM_APP_INIT (WM_APP + 2)

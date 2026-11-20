@@ -118,6 +118,12 @@ static void tool_stub(SB *o, Conv *c, const int *p, int i)
     j_free(a);
 }
 static char *tools_schema_build(void); /* defined in tools.h: JSON array for the "tools" request field, or NULL */
+/* AGENTS.md text for the system message, after the system prompt; NULL = none. Filled before each request by
+   sys_extra_refresh() (skills.h); the same file contents give the same text, so the KV prefix stays valid. */
+static char *g_agents_txt;
+/* Where the file tools work (the root folder's full path), right after the system prompt; NULL = no file tools.
+   Without it models guess Documents or the program folder. Filled by sys_extra_refresh() like g_agents_txt. */
+static char *g_env_txt;
 static char *mem_digest_for(const char *query); /* memory.h */
 /* The memory digest is snapshotted per conversation: a memory_save in the middle of a chat must not change
    the system prompt, because that invalidates llama-server's KV prefix cache for the whole history. It is
@@ -262,6 +268,18 @@ static void build_messages(SB *s, Conv *c, const Cfg *g, size_t tools_chars)
     g_req_fit_elided = g_req_fit_clipped = g_req_fit_dropped = 0;
     sb_puts(s, "\"messages\":[");
     sb_puts(&sy, g->sys);
+    if (g_env_txt && *g_env_txt)
+    {
+        if (sy.n)
+            sb_puts(&sy, "\n\n");
+        sb_puts(&sy, g_env_txt);
+    }
+    if (g_agents_txt && *g_agents_txt)
+    {
+        if (sy.n)
+            sb_puts(&sy, "\n\n");
+        sb_puts(&sy, g_agents_txt);
+    }
     if (md)
     {
         if (sy.n)
