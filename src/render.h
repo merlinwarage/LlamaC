@@ -45,7 +45,6 @@ static void render_fold(const char *label, const char *txt, size_t n, int code, 
     re_nl();
     if (t->collapsed)
         set_hidden(t->a, t->b + 1, 1);
-    re_nl();
 }
 static void render_think(const char *txt, size_t n)
 {
@@ -54,6 +53,7 @@ static void render_think(const char *txt, size_t n)
         return;
     snprintf(label, sizeof label, "Thinking (%u chars)", (unsigned)n);
     render_fold(label, txt, n, 0, NULL);
+    re_nl(); /* a blank line between the block and the answer */
 }
 
 /* ---------- streaming: coalesce tokens, flush on a timer ---------- */
@@ -658,6 +658,8 @@ static void render_tool_result(Node *m)
         while (n && ((unsigned char)m->content[n] & 0xC0) == 0x80)
             n--;
     }
+    while (n > 1 && (m->content[n - 1] == '\n' || m->content[n - 1] == '\r'))
+        n--; /* the block adds its own line end */
     render_fold(h, m->content, n, 1, n < full ? "\n... (shortened in this view; the model received the full result)" : NULL);
 }
 static void render_tool_calls(const char *json)
@@ -804,7 +806,7 @@ static void render_node(const int *p, int i, int n, int base)
         if (m->tcalls && *m->tcalls)
             render_tool_calls(m->tcalls);
     }
-    if (!(busy && cur == genConv && p[i] == genNode))
+    if (!(busy && cur == genConv && p[i] == genNode && i == n - 1)) /* still streaming: no closing newline yet */
         re_nl();
 }
 static void render_all(void)

@@ -361,7 +361,7 @@ static const SItem SLAY_R[] = {
     {"!mcp", NULL, NULL, 0},
     {"#", "Display", NULL, 0},
     {"dark", NULL, "Dark colour theme.", 0},
-    {"thoughts", NULL, "Show the model's reasoning as a collapsible Thinking block above the answer.", 0},
+    {"thoughts", NULL, "Show the model's reasoning as a collapsible Thinking block above the answer, and tool results as collapsible blocks (click to open). Off hides both; the tool calls stay visible.", 0},
     {"stats", NULL, "Status bar shows prompt / generated tokens, speed and context use while generating.", 0},
     {"fade", NULL, "Streamed text fades in instead of appearing at once.", 0},
     {"smartpaste", NULL, "Pasting more than 2000 characters into the input adds them as an attachment (pasted-text.txt) instead of filling the box.", 0},
