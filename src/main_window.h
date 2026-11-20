@@ -36,6 +36,8 @@ static void input_autosize(void)
 }
 static LRESULT CALLBACK InputProc(HWND h, UINT m, WPARAM w, LPARAM l)
 {
+    if (skac_key(m, w))
+        return 0; /* the "/name" skill popup took the key (skills.h) */
     if (m == WM_KEYDOWN && w == VK_ESCAPE && g_cp_on)
     { /* Esc hides the copilot panel */
         cp_hide();
@@ -95,6 +97,7 @@ static LRESULT CALLBACK InputProc(HWND h, UINT m, WPARAM w, LPARAM l)
 static void layout(void)
 {
     RECT rc;
+    skac_follow(); /* the "/name" popup follows the input box */
     if (g_cp_on)
     { /* the composer and the chat view are in the copilot panel */
         cp_relayout();
@@ -560,7 +563,10 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l)
         if (id == IDC_INPUT)
         {
             if (nt == EN_CHANGE)
+            {
                 input_autosize();
+                skac_update(); /* "/name" skill suggestions */
+            }
             return 0;
         }
         if (id == IDC_MODEL && nt == CBN_SELCHANGE)
@@ -1110,6 +1116,9 @@ static LRESULT CALLBACK MainProc(HWND h, UINT m, WPARAM w, LPARAM l)
             cfg_save();
         }
         return 0;
+    case WM_MOVE:
+        skac_follow();
+        break;
     case WM_DESTROY:
         cp_tray(0);
         if (g_cp_hk)

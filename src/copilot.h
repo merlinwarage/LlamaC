@@ -237,6 +237,7 @@ static void cp_layout(void)
 {
     RECT rc;
     int W, left = CP_PAD, cw, yBox, x;
+    skac_follow(); /* the panel moves or grows: the "/name" popup follows the input box */
     if (!hPanel || !g_cp_on)
         return;
     GetClientRect(hPanel, &rc);

@@ -455,6 +455,324 @@ static void act_skills(void)
     skills_btn_update(); /* the counts may have changed with the scan */
 }
 
+/* ---------- "/name" autocomplete in the input box ----------
+   While the message starts with "/" and the caret is in that first word, a popup above the input lists the skills
+   whose name starts with (then contains) what was typed; ticked skills first, marked with a dot. Up/Down choose,
+   Tab or Enter insert "/name ", Esc closes; a click inserts too. The popup never takes the focus. */
+#define SKAC_ROWS 8
+#define SKAC_ROWH 28
+#define SKAC_FOOT 22
+typedef struct
+{
+    char name[64];
+    char desc[240];
+    int on;
+} SkacRow;
+static HWND g_skac;
+static SkacRow g_skac_row[SKAC_ROWS];
+static int g_skac_n, g_skac_sel, g_skac_tok, g_skac_eatesc; /* rows, selected row, wchars of "/prefix", swallow Esc char */
+static int g_skac_more;                                     /* matches that did not fit */
+
+static int skac_visible(void) { return g_skac && IsWindowVisible(g_skac); }
+static void skac_hide(void)
+{
+    if (skac_visible())
+        ShowWindow(g_skac, SW_HIDE);
+}
+/* the input box moved (layout, window move, the copilot panel growing while it streams): place the popup again once
+   the layout is done - through the input's EN_CHANGE handler, which only resizes the box when its height changed */
+static void skac_follow(void)
+{
+    if (skac_visible())
+        PostMessageW(hMain, WM_COMMAND, MAKEWPARAM(IDC_INPUT, EN_CHANGE), (LPARAM)hInput);
+}
+static int skac_namech(wchar_t c) { return (c < 128 && isalnum(c)) || c == L'-' || c == L'_' || c == L'.'; }
+/* inserts "/name " in place of the typed "/prefix" */
+static void skac_accept(int i)
+{
+    wchar_t *rep;
+    char ins[80];
+    int len = GetWindowTextLengthW(hInput), sp = 0;
+    if (i < 0 || i >= g_skac_n)
+        return;
+    if (len > g_skac_tok)
+    { /* already followed by a space: do not add another */
+        wchar_t *all = (wchar_t *)malloc(((size_t)len + 1) * sizeof(wchar_t));
+        GetWindowTextW(hInput, all, len + 1);
+        sp = all[g_skac_tok] == L' ';
+        free(all);
+    }
+    snprintf(ins, sizeof ins, "/%s%s", g_skac_row[i].name, sp ? "" : " ");
+    rep = w_from(ins);
+    skac_hide();
+    SendMessageW(hInput, EM_SETSEL, 0, g_skac_tok);
+    SendMessageW(hInput, EM_REPLACESEL, TRUE, (LPARAM)rep);
+    if (sp)
+    { /* caret after the existing space */
+        DWORD e = (DWORD)wcslen(rep) + 1;
+        SendMessageW(hInput, EM_SETSEL, e, e);
+    }
+    free(rep);
+}
+static void skac_paint(HWND h)
+{
+    PAINTSTRUCT ps;
+    HDC dc = BeginPaint(h, &ps), m;
+    RECT rc, r;
+    HBITMAP bm;
+    HGDIOBJ ob, of;
+    HBRUSH bg;
+    GetClientRect(h, &rc);
+    m = CreateCompatibleDC(dc); /* double-buffered: no flicker while the selection moves */
+    bm = CreateCompatibleBitmap(dc, rc.right, rc.bottom);
+    ob = SelectObject(m, bm);
+    bg = CreateSolidBrush(cSurf);
+    FillRect(m, &rc, bg);
+    DeleteObject(bg);
+    rrect(m, &rc, 1, cSurf, cBorder);
+    SetBkMode(m, TRANSPARENT);
+    of = SelectObject(m, hFont);
+    for (int i = 0; i < g_skac_n; i++)
+    {
+        wchar_t *wn = w_from(g_skac_row[i].name), *wd = w_from(g_skac_row[i].desc);
+        SIZE sz;
+        SetRect(&r, 4, 4 + i * SKAC_ROWH, rc.right - 4, 4 + (i + 1) * SKAC_ROWH);
+        if (i == g_skac_sel)
+            rrect(m, &r, 8, adj(cSurf, G.dark ? 18 : -12), adj(cSurf, G.dark ? 18 : -12));
+        if (g_skac_row[i].on)
+        { /* ticked in the Skills dialog: offered to the model anyway */
+            RECT d;
+            int cy = (r.top + r.bottom) / 2;
+            SetRect(&d, r.left + 8, cy - 3, r.left + 14, cy + 3);
+            rrect(m, &d, 6, cAccent, cAccent);
+        }
+        SelectObject(m, hFontB);
+        SetTextColor(m, cFg);
+        r.left += 22;
+        GetTextExtentPoint32W(m, wn, (int)wcslen(wn), &sz);
+        DrawTextW(m, wn, -1, &r, DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_END_ELLIPSIS);
+        r.left += sz.cx + 12;
+        SelectObject(m, hFont);
+        SetTextColor(m, cDim);
+        r.right -= 8;
+        if (r.left < r.right)
+            DrawTextW(m, wd, -1, &r, DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_END_ELLIPSIS);
+        free(wn);
+        free(wd);
+    }
+    SetRect(&r, 26, rc.bottom - SKAC_FOOT - 2, rc.right - 10, rc.bottom - 2);
+    SelectObject(m, hFontXS);
+    SetTextColor(m, cDim);
+    {
+        wchar_t foot[160], more[40] = L"";
+        if (g_skac_more)
+            _snwprintf(more, 40, L"+%d more, keep typing   ", g_skac_more);
+        more[39] = 0;
+        _snwprintf(foot, 160, L"%ls\x2191\x2193 choose   Tab/Enter insert   Esc close   \x25CF ticked in Skills", more);
+        foot[159] = 0;
+        DrawTextW(m, foot, -1, &r, DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_END_ELLIPSIS);
+    }
+    BitBlt(dc, 0, 0, rc.right, rc.bottom, m, 0, 0, SRCCOPY);
+    SelectObject(m, of);
+    SelectObject(m, ob);
+    DeleteObject(bm);
+    DeleteDC(m);
+    EndPaint(h, &ps);
+}
+static LRESULT CALLBACK SkacProc(HWND h, UINT m, WPARAM w, LPARAM l)
+{
+    switch (m)
+    {
+    case WM_MOUSEACTIVATE:
+        return MA_NOACTIVATE; /* the input keeps the focus */
+    case WM_MOUSEMOVE:
+    {
+        int i = ((short)HIWORD(l) - 4) / SKAC_ROWH;
+        if (i >= 0 && i < g_skac_n && i != g_skac_sel)
+        {
+            g_skac_sel = i;
+            InvalidateRect(h, NULL, FALSE);
+        }
+        return 0;
+    }
+    case WM_LBUTTONDOWN:
+    {
+        int i = ((short)HIWORD(l) - 4) / SKAC_ROWH;
+        if (i >= 0 && i < g_skac_n)
+            skac_accept(i);
+        return 0;
+    }
+    case WM_ERASEBKGND:
+        return 1;
+    case WM_PAINT:
+        skac_paint(h);
+        return 0;
+    }
+    return DefWindowProcW(h, m, w, l);
+}
+/* 2 = name starts with pre, 1 = contains it (not at the start), 0 = no match; ignores case */
+static int skac_match(const char *name, const char *pre, int pl)
+{
+    char a[64], b[64];
+    if (!_strnicmp(name, pre, (size_t)pl))
+        return 2;
+    if (!pl)
+        return 0;
+    snprintf(a, sizeof a, "%s", name);
+    snprintf(b, sizeof b, "%s", pre);
+    _strlwr(a);
+    _strlwr(b);
+    return strstr(a, b) != NULL;
+}
+/* re-reads the input after a change or a caret move: shows, updates or hides the popup */
+static void skac_update(void)
+{
+    wchar_t t[80];
+    char pre[64];
+    DWORD s = 0, e = 0;
+    int len, tok = 1, pl, n = 0, keep = -1;
+    char keepn[64] = "";
+    HWND owner;
+    if (!hInput)
+        return;
+    len = GetWindowTextW(hInput, t, 80);
+    SendMessageW(hInput, EM_GETSEL, (WPARAM)&s, (LPARAM)&e);
+    if (len < 1 || t[0] != L'/' || s != e)
+    {
+        skac_hide();
+        return;
+    }
+    while (tok < len && skac_namech(t[tok]))
+        tok++;
+    pl = tok - 1;
+    if ((tok < len && !iswspace(t[tok])) || (tok == len && len == 79) || e < 1 || (int)e > tok || pl > 63)
+    { /* "/path/x", caret after the first word, or a word too long for a skill name */
+        skac_hide();
+        return;
+    }
+    for (int i = 0; i < pl; i++)
+        pre[i] = (char)t[i + 1];
+    pre[pl] = 0;
+    if (!skac_visible())
+        skills_scan(); /* the folders may have changed since the last look */
+    if (skac_visible() && g_skac_sel < g_skac_n)
+        snprintf(keepn, sizeof keepn, "%s", g_skac_row[g_skac_sel].name);
+    tl_enter();
+    for (int pass = 0; pass < 4 && n < SKAC_ROWS; pass++)
+        for (int i = 0; i < g_nsk && n < SKAC_ROWS; i++)
+        { /* 0: starts with, ticked  1: starts with  2: contains, ticked  3: contains */
+            const Skill *k = &g_sk[i];
+            int on = name_in_list(G.skillon, k->name) != 0, mt;
+            if (k->hidden || on != !(pass & 1))
+                continue;
+            mt = skac_match(k->name, pre, pl);
+            if (mt != (pass < 2 ? 2 : 1))
+                continue;
+            snprintf(g_skac_row[n].name, sizeof g_skac_row[n].name, "%s", k->name);
+            snprintf(g_skac_row[n].desc, sizeof g_skac_row[n].desc, "%s", k->desc);
+            g_skac_row[n].on = on;
+            if (!strcmp(k->name, keepn))
+                keep = n;
+            n++;
+        }
+    g_skac_more = 0;
+    for (int i = 0; i < g_nsk; i++)
+        if (!g_sk[i].hidden && skac_match(g_sk[i].name, pre, pl))
+            g_skac_more++;
+    g_skac_more = g_skac_more > n ? g_skac_more - n : 0;
+    tl_leave();
+    if (!n || (n == 1 && !_stricmp(g_skac_row[0].name, pre)))
+    { /* nothing matches, or the name is already complete */
+        g_skac_n = 0;
+        skac_hide();
+        return;
+    }
+    g_skac_n = n;
+    g_skac_sel = keep >= 0 ? keep : 0;
+    g_skac_tok = tok;
+    owner = GetAncestor(hInput, GA_ROOT); /* the main window or the copilot panel */
+    if (g_skac && GetWindow(g_skac, GW_OWNER) != owner)
+    {
+        DestroyWindow(g_skac);
+        g_skac = NULL;
+    }
+    if (!g_skac)
+    {
+        static int reg = 0;
+        if (!reg)
+        {
+            WNDCLASSEXW wc;
+            memset(&wc, 0, sizeof wc);
+            wc.cbSize = sizeof wc;
+            wc.style = CS_DROPSHADOW;
+            wc.lpfnWndProc = SkacProc;
+            wc.hInstance = GetModuleHandleW(NULL);
+            wc.hCursor = LoadCursorW(NULL, IDC_HAND);
+            wc.lpszClassName = L"LCSkillAC";
+            RegisterClassExW(&wc);
+            reg = 1;
+        }
+        g_skac = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, L"LCSkillAC", NULL, WS_POPUP, 0, 0, 10, 10, owner, NULL, GetModuleHandleW(NULL), NULL);
+        if (!g_skac)
+            return;
+    }
+    {
+        RECT ir;
+        MONITORINFO mi;
+        int W, H = n * SKAC_ROWH + 8 + SKAC_FOOT, x, y;
+        GetWindowRect(hInput, &ir);
+        x = ir.left - 14;
+        W = ir.right - ir.left + 28;
+        y = ir.top - 13 - 6 - H; /* above the input box: the composer is at the bottom */
+        mi.cbSize = sizeof mi;
+        GetMonitorInfoW(MonitorFromWindow(hInput, MONITOR_DEFAULTTONEAREST), &mi);
+        if (y < mi.rcWork.top)
+            y = ir.bottom + 11 + 6; /* no room above (copilot panel at the top of the screen): below */
+        SetWindowPos(g_skac, HWND_TOP, x, y, W, H, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        InvalidateRect(g_skac, NULL, FALSE);
+    }
+}
+/* input box keys and focus while the popup is open; 1 = handled */
+static int skac_key(UINT m, WPARAM w)
+{
+    if (m == WM_CHAR && w == 27 && g_skac_eatesc)
+    { /* the character of the Esc that closed the popup: no beep, and the copilot panel stays */
+        g_skac_eatesc = 0;
+        return 1;
+    }
+    if (m == WM_KILLFOCUS)
+    {
+        skac_hide();
+        return 0;
+    }
+    if ((m == WM_KEYUP && (w == VK_LEFT || w == VK_RIGHT || w == VK_HOME || w == VK_END)) || m == WM_LBUTTONUP)
+    { /* the caret moved without a text change */
+        if (skac_visible())
+            skac_update();
+        return 0;
+    }
+    if (!skac_visible())
+        return 0;
+    if (m == WM_KEYDOWN && (w == VK_UP || w == VK_DOWN))
+    {
+        g_skac_sel = (g_skac_sel + (w == VK_DOWN ? 1 : g_skac_n - 1)) % g_skac_n;
+        InvalidateRect(g_skac, NULL, FALSE);
+        return 1;
+    }
+    if (m == WM_KEYDOWN && w == VK_ESCAPE)
+    {
+        skac_hide();
+        g_skac_eatesc = 1;
+        return 1;
+    }
+    if (m == WM_CHAR && (w == L'\t' || (w == L'\r' && !(GetKeyState(VK_SHIFT) & 0x8000))))
+    {
+        skac_accept(g_skac_sel);
+        return 1;
+    }
+    return 0;
+}
+
 /* ---------- AGENTS.md: standing instructions for coding agents (agents.md convention) ----------
    %USERPROFILE%\.agents\AGENTS.md (the user's, for every project) and <root folder>\AGENTS.md (the project's) are
    added to the system message when they exist. Read before every request: cheap, and an edit applies at once; the
